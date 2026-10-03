@@ -35,6 +35,8 @@ SIGNIN_PER_USERNAME = Limit("signin-username", 10, 900)
 API_WRITES_PER_PLAYER = Limit("writes-player", 60, 60)
 ACHIEVEMENTS_PER_PLAYER = Limit("achievements-player", 100, 3600)
 ACCOUNT_FORMS_PER_PLAYER = Limit("account-player", 20, 3600)
+# Per account and game (RFC 0016 §6): a page uploads at most once per 30 s.
+SAVES_UPLOADS_PER_GAME = Limit("saves-uploads", 120, 3600)
 
 
 class RateLimiter(object):

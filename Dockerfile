@@ -18,8 +18,9 @@ ENV PYTHONPATH=/app/src \
     ARCADE_SOCIAL_REGISTRY=/config/arcade/games.yaml \
     ARCADE_SOCIAL_BOARDS=/config/play/boards.yaml
 
-# /data holds the SQLite database: player data, so it MUST be backed up
-# (python -m arcade_social backup FILE). /config/arcade and /config/play are
+# /data holds the SQLite databases: player data, so they MUST be backed up
+# (python -m arcade_social backup FILE; cloud saves, in /data/saves.sqlite3,
+# with backup-saves FILE). /config/arcade and /config/play are
 # the gateway's config directories, mounted read-only.
 VOLUME ["/data"]
 EXPOSE 8080

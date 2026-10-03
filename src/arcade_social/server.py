@@ -33,6 +33,8 @@ import traceback
 from urllib.parse import parse_qs, unquote, urlencode, urlparse, urlunparse
 
 from arcade_social import __version__, config as configModule, displaynames, origins, pages, ratelimit
+from arcade_social import saves as savesModule
+from arcade_social.saves_store import SavesStore
 from arcade_social.store import NameHeld, NameTaken, NameTooSoon, Store
 from arcade_social.userauth import Busy, Conflict, Invalid, Rejected, Unavailable, UserAuthClient
 
@@ -49,6 +51,9 @@ _SLUG = re.compile(r"^[a-z][a-z0-9-]{1,30}$")
 _ID = re.compile(r"^[a-z][a-z0-9-]{1,30}$")
 _RUN = re.compile(r"^[A-Za-z0-9._:-]{1,64}$")
 _USERNAME = re.compile(r"^[^/\s]{1,50}$")
+_STORE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
+# Room in an upload body for the fields around the save file itself.
+UPLOAD_OVERHEAD_BYTES = 64 * 1024
 
 # Route access levels.
 PUBLIC = "public"  # anyone; Access-Control-Allow-Origin: * (or the allowed origin, credentialed)
@@ -73,6 +78,15 @@ ROUTES = (
     ("GET", r"^/v1/likes/me$", "apiMyLikes", PRIVATE),
     ("POST", r"^/v1/likes/(?P<slug>[^/]+)$", "apiLike", WRITE),
     ("DELETE", r"^/v1/likes/(?P<slug>[^/]+)$", "apiUnlike", WRITE),
+    # cloud saves (RFC 0016): the game is always the caller's Origin
+    ("GET", r"^/v1/saves/(?P<store>[^/]+)$", "apiSavesStatus", PRIVATE),
+    ("PUT", r"^/v1/saves/(?P<store>[^/]+)$", "apiSavesUpload", WRITE),
+    ("DELETE", r"^/v1/saves/(?P<store>[^/]+)$", "apiSavesDeleteGame", WRITE),
+    ("POST", r"^/v1/saves/(?P<store>[^/]+)/enroll$", "apiSavesEnroll", WRITE),
+    ("DELETE", r"^/v1/saves/(?P<store>[^/]+)/enroll$", "apiSavesUnenroll", WRITE),
+    ("GET", r"^/v1/saves/(?P<store>[^/]+)/versions$", "apiSavesVersions", PRIVATE),
+    ("GET", r"^/v1/saves/(?P<store>[^/]+)/versions/(?P<version>[0-9]{1,18})$", "apiSavesVersion", PRIVATE),
+    ("POST", r"^/v1/saves/(?P<store>[^/]+)/versions/(?P<version>[0-9]{1,18})/pin$", "apiSavesPin", WRITE),
     ("GET", r"^/v1/admin/entries/(?P<entry>[0-9]{1,18})$", "adminEntry", ADMIN_READ),
     ("DELETE", r"^/v1/admin/entries/(?P<entry>[0-9]{1,18})$", "adminDeleteEntry", ADMIN_WRITE),
     ("GET", r"^/v1/admin/log/(?P<slug>[^/]+)/(?P<board>[^/]+)$", "adminLog", ADMIN_READ),
@@ -98,11 +112,22 @@ class ApiError(Exception):
 class Social(object):
     """The state one server process shares across requests."""
 
-    def __init__(self, config, store=None, userauth=None, limiter=None, clock=time.time):
+    def __init__(self, config, store=None, userauth=None, limiter=None, clock=time.time, savesStore=None):
         self.config = config
         self.registryHolder = configModule.registryHolder(config)
         self.boardsHolder = configModule.boardsHolder(config)
+        self.savesHolder = configModule.savesHolder(config)
         self.store = store if store is not None else Store(config.databasePath)
+        # Opened (and migrated) whatever ARCADE_SOCIAL_SAVES says, so a
+        # player's deletion always reaches their cloud saves (RFC 0016 §8).
+        self.savesStore = savesStore if savesStore is not None else SavesStore(config.savesDatabasePath)
+        self.saves = savesModule.Saves(
+            self.savesStore,
+            savesModule.Policy(
+                config.savesMode, config.savesAccounts, config.savesPlayerMaxBytes, config.savesDatabaseMaxBytes
+            ),
+            self.savesHolder,
+        )
         self.userauth = (
             userauth
             if userauth is not None
@@ -154,6 +179,16 @@ class Social(object):
 
     def isOperator(self, username):
         return username is not None and username in self.config.operators
+
+    def deletePlayer(self, username):
+        """Everything held about an account, in both files. The saves file
+        goes first, in its own transaction, so a failure between the two
+        leaves the player row - and so the saves - still deletable (RFC 0016
+        §8), never orphaned saves without a player to find them by."""
+        player = self.store.player(username)
+        if player is not None:
+            self.savesStore.deletePlayer(player["id"])
+        return self.store.deletePlayer(username)
 
     def maintain(self):
         removed = self.store.pruneLog(self.config.logRetentionDays)
@@ -782,7 +817,7 @@ def makeHandler(social):
             username = self._signedIn()
             if username is None:
                 raise ApiError(401, "sign in required", signIn=config.publicUrl + "/signin")
-            deleted = social.store.deletePlayer(username)
+            deleted = social.deletePlayer(username)
             log("a player deleted their data")
             self._json(200, {"deleted": deleted})
 
@@ -825,6 +860,142 @@ def makeHandler(social):
                 raise ApiError(401, "sign in required", signIn=config.publicUrl + "/signin")
             player = social.store.player(username)
             self._json(200, social.store.likedBy(player["id"]) if player is not None else [])
+
+        # cloud saves (RFC 0016)
+
+        def _savesError(self, error):
+            extra = dict(error.extra)
+            if extra.get("head") is not None:
+                extra["head"] = self._versionPayload(extra["head"])
+            elif "head" in extra:
+                extra["head"] = None
+            return ApiError(error.status, error.message, saves=error.code, **extra)
+
+        def _versionPayload(self, version):
+            version = dict(version)
+            version["createdAt"] = _iso(version["createdAt"])
+            return version
+
+        def _savesCall(self, function, *arguments):
+            try:
+                return function(*arguments)
+            except savesModule.SavesError as e:
+                raise self._savesError(e)
+
+        def _savesGame(self, caller, store):
+            """(slug, game) for a saves request, after the kill switch: the
+            slug is the caller's Origin, never anything the page sends."""
+            slug = self._gameCaller(caller, "cloud saves")
+            if not _STORE.match(store):
+                raise ApiError(404, "no such store", saves="unknown-store")
+            self._savesCall(social.saves.requireOn)
+            return slug, self._savesCall(social.saves.game, slug, store)
+
+        def apiSavesStatus(self, caller, store):
+            slug, game = self._savesGame(caller, store)
+            username, player = self._requirePlayer(create=False)
+            payload = self._savesCall(
+                social.saves.status, player["id"] if player else None, username, slug, store
+            )
+            if payload.get("head") is not None:
+                payload["head"] = self._versionPayload(payload["head"])
+            payload["slug"] = slug
+            payload["store"] = store
+            self._json(200, payload)
+
+        def apiSavesEnroll(self, caller, store):
+            slug, game = self._savesGame(caller, store)
+            self._jsonBody(())
+            username, player = self._requirePlayer()
+            self._limit(ratelimit.API_WRITES_PER_PLAYER, player["id"])
+            newly = self._savesCall(social.saves.enroll, player["id"], username, slug, store)
+            if newly:
+                log("a player turned on cloud saves for %s" % slug)
+            self._json(200, {"slug": slug, "store": store, "enrolled": True, "newlyEnrolled": newly})
+
+        def apiSavesUnenroll(self, caller, store):
+            slug, game = self._savesGame(caller, store)
+            self._jsonBody(())
+            username, player = self._requirePlayer(create=False)
+            if player is not None:
+                social.savesStore.unenroll(player["id"], slug, store)
+            self._json(200, {"slug": slug, "store": store, "enrolled": False})
+
+        def apiSavesUpload(self, caller, store):
+            slug, game = self._savesGame(caller, store)
+            refusal = social.saves.policy.writable(game)
+            if refusal is not None:
+                raise self._savesError(refusal)
+            username, player = self._requirePlayer(create=False)
+            if player is None or not social.savesStore.enrolled(player["id"], slug, store):
+                if not social.saves.policy.allowed(username):
+                    raise ApiError(403, "cloud saves are not open to this account yet", saves="not-allowed")
+                raise ApiError(403, "turn on cloud backup for this game first", saves="not-enrolled")
+            self._limit(ratelimit.API_WRITES_PER_PLAYER, player["id"])
+            wait = social.limiter.hit(ratelimit.SAVES_UPLOADS_PER_GAME, (player["id"], slug))
+            if wait:
+                raise ApiError(
+                    429, "too many uploads; try again later", saves="rate", headers=(("Retry-After", str(wait)),)
+                )
+            if self._contentLength() > game.maxUploadBytes + UPLOAD_OVERHEAD_BYTES:
+                self.close_connection = True
+                raise ApiError(
+                    413,
+                    "these saves are larger than this game's cloud limit",
+                    saves="too-large",
+                    maxUploadBytes=game.maxUploadBytes,
+                )
+            raw = self._readBody(game.maxUploadBytes + UPLOAD_OVERHEAD_BYTES)
+            try:
+                body = json.loads(raw.decode("utf-8"), parse_constant=_rejectConstant)
+            except (ValueError, UnicodeError):
+                raise ApiError(400, "the body is not valid JSON", saves="invalid")
+            origin = caller.origin
+            result = self._savesCall(social.saves.upload, player["id"], username, slug, store, origin, body)
+            self._json(201 if result.created else 200, {"id": result.id, "created": result.created})
+
+        def apiSavesVersions(self, caller, store):
+            slug, game = self._savesGame(caller, store)
+            username, player = self._requirePlayer(create=False)
+            versions = social.savesStore.versions(player["id"], slug, store) if player else []
+            self._json(
+                200, {"slug": slug, "store": store, "versions": [self._versionPayload(v) for v in versions]}
+            )
+
+        def apiSavesVersion(self, caller, store, version):
+            slug, game = self._savesGame(caller, store)
+            username, player = self._requirePlayer(create=False)
+            if player is None:
+                raise ApiError(404, "no such version", saves="no-version")
+            description, saveFile = self._savesCall(
+                social.saves.versionFile, player["id"], slug, store, int(version), _iso
+            )
+            headers = ()
+            if self._param("download") == "1":
+                name = "%s-cloud-%s-v%d.json" % (slug, description["createdAtIso"][:10], description["id"])
+                headers = (("Content-Disposition", 'attachment; filename="%s"' % name),)
+            self._json(200, saveFile, headers=headers)
+
+        def apiSavesPin(self, caller, store, version):
+            slug, game = self._savesGame(caller, store)
+            refusal = social.saves.policy.writable(game)
+            if refusal is not None:
+                raise self._savesError(refusal)
+            self._jsonBody(())
+            username, player = self._requirePlayer(create=False)
+            if player is None or not social.savesStore.pin(player["id"], slug, store, int(version)):
+                raise ApiError(404, "no such version", saves="no-version")
+            self._json(200, {"id": int(version), "pinned": True})
+
+        def apiSavesDeleteGame(self, caller, store):
+            slug, game = self._savesGame(caller, store)
+            body = self._jsonBody(("confirm",))
+            if body.get("confirm") != "delete":
+                raise ApiError(400, 'send {"confirm": "delete"} to delete this game\'s cloud saves', saves="invalid")
+            username, player = self._requirePlayer(create=False)
+            removed = social.savesStore.deleteGame(player["id"], slug, store) if player else 0
+            log("a player deleted their cloud saves for %s" % slug)
+            self._json(200, {"slug": slug, "store": store, "deleted": removed})
 
         # operator tools
 
@@ -950,6 +1121,9 @@ def makeHandler(social):
                 ("GET", "/account/name"): self.pageChangeName,
                 ("POST", "/account/name"): self.postChangeName,
                 ("GET", "/account/export"): self.pageExport,
+                ("GET", "/account/saves"): self.pageSaves,
+                ("GET", "/account/saves/download"): self.pageSavesDownload,
+                ("POST", "/account/saves/delete"): self.postSavesDelete,
                 ("POST", "/account/delete"): self.postDelete,
                 ("POST", "/signout"): self.postSignOut,
             }.get((method, path))
@@ -1182,6 +1356,17 @@ def makeHandler(social):
                 return
             username, _ = session
             exported = social.store.export(username) or {}
+            player = social.store.player(username)
+            if player is not None:
+                # What is held, not the saves themselves: each version is a
+                # download of its own on /account/saves (RFC 0016 §5).
+                cloud = []
+                for game in social.savesStore.games(player["id"]):
+                    game["versions"] = [
+                        self._versionPayload(v) for v in social.savesStore.versions(player["id"], game["slug"], game["store"])
+                    ]
+                    cloud.append(game)
+                exported["cloudSaves"] = cloud
             body = (json.dumps(exported, indent=2, sort_keys=True) + "\n").encode("utf-8")
             self._send(
                 200,
@@ -1193,6 +1378,71 @@ def makeHandler(social):
                 ),
             )
 
+        def pageSaves(self, error=None, notice=None, status=200):
+            session = self._pageSession()
+            if session is None:
+                return
+            username, player = session
+            games = []
+            available = social.saves.policy.mode != savesModule.OFF
+            if available:
+                for game in social.savesStore.games(player["id"]):
+                    registered = social.registry.get(game["slug"])
+                    versions = social.savesStore.versions(player["id"], game["slug"], game["store"], limit=20)
+                    for version in versions:
+                        version["createdAt"] = _iso(version["createdAt"])
+                    game["title"] = getattr(registered, "title", None) or game["slug"]
+                    game["count"] = game["versions"]
+                    game["versions"] = versions
+                    games.append(game)
+            self._html(status, pages.saves(self._csrf(), games, available, error, notice))
+
+        def pageSavesDownload(self):
+            session = self._pageSession()
+            if session is None:
+                return
+            username, player = session
+            slug = self._param("slug") or ""
+            store = self._param("store") or ""
+            versionId = self._param("id") or ""
+            if not _SLUG.match(slug) or not _STORE.match(store) or not versionId.isdigit() or len(versionId) > 18:
+                raise _PageError(404, "No such saved version.")
+            if social.saves.policy.mode == savesModule.OFF:
+                raise _PageError(503, "Cloud saves are unavailable right now.")
+            try:
+                description, saveFile = social.saves.versionFile(player["id"], slug, store, int(versionId), _iso)
+            except savesModule.SavesError:
+                raise _PageError(404, "No such saved version.")
+            body = (json.dumps(saveFile, indent=1, sort_keys=True) + "\n").encode("utf-8")
+            name = "%s-cloud-%s-v%d.json" % (slug, description["createdAtIso"][:10], description["id"])
+            self._send(
+                200,
+                body,
+                "application/json",
+                (("Content-Disposition", 'attachment; filename="%s"' % name), ("Cache-Control", "no-store")),
+            )
+
+        def postSavesDelete(self):
+            fields = self._form()
+            session = self._pageSession()
+            if session is None:
+                return
+            username, player = session
+            slug = fields.get("slug", "")
+            store = fields.get("store", "")
+            if not _SLUG.match(slug) or not _STORE.match(store):
+                self.pageSaves(error="No such game.", status=400)
+                return
+            if social.saves.policy.mode == savesModule.OFF:
+                self.pageSaves(status=503)
+                return
+            if fields.get("confirm", "").strip().lower() != "delete":
+                self.pageSaves(error="Type delete to confirm. Nothing was deleted.", status=400)
+                return
+            removed = social.savesStore.deleteGame(player["id"], slug, store)
+            log("a player deleted their cloud saves for %s" % slug)
+            self.pageSaves(notice="Deleted %d cloud version(s) of %s. Your browsers' saves are untouched." % (removed, slug))
+
         def postDelete(self):
             fields = self._form()
             session = self._pageSession()
@@ -1202,14 +1452,14 @@ def makeHandler(social):
             if fields.get("confirm", "").strip().lower() != "delete":
                 self.pageAccount(error="Type delete to confirm.", status=400)
                 return
-            social.store.deletePlayer(username)
+            social.deletePlayer(username)
             log("a player deleted their data")
             self._signOut()
             self._html(
                 200,
                 pages.message(
                     "Your data is deleted",
-                    "Every score, achievement, like and your display name are gone from this service, "
+                    "Every score, achievement, like, cloud save and your display name are gone from this service, "
                     "and you are signed out. Your UserAuth account itself still exists.",
                     config.defaultReturn,
                     "Back to the games",

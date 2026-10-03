@@ -170,12 +170,13 @@ def account(csrf, username, displayName, summary, returnUrl, error=None, notice=
 <p>Display name: <strong>%s</strong></p>%s
 <p class="muted">Held here: %d best score(s), %d achievement(s), %d like(s).
 <a href="/account/export">Download it as JSON</a>.</p>
+<p><a href="/account/saves">Cloud saves</a></p>
 <form method="post" action="/signout">%s<button class="quiet" type="submit">Sign out</button></form>
 </div>
 <hr>
 <form class="card" method="post" action="/account/delete">%s
 <h2 style="font-size:1.1rem;margin:0">Delete my data</h2>
-<p class="muted">Deletes every score, achievement, like and your display name from this service, now.
+<p class="muted">Deletes every score, achievement, like, cloud save and your display name from this service, now.
 It does not delete your UserAuth account itself (UserAuth has no way to do that yet; ask the site owner).
 Backups age out on their own schedule.</p>
 <label for="confirm">Type <strong>delete</strong> to confirm</label>
@@ -195,6 +196,84 @@ Backups age out on their own schedule.</p>
             _hidden(csrf, returnUrl),
             _e(returnUrl),
         ),
+    )
+
+
+def _size(count):
+    if count < 1024:
+        return "%d bytes" % count
+    if count < 1024 * 1024:
+        return "%.1f KB" % (count / 1024.0)
+    return "%.1f MB" % (count / (1024.0 * 1024.0))
+
+
+def saves(csrf, games, available, error=None, notice=None):
+    """The player's cloud saves, per game: every version, each one a download
+    (a save file the game's "Load saves from a file" accepts), and a typed
+    delete. games: [{slug, title, store, enrolled, storedBytes, versions: [...]}]."""
+    if not available:
+        body = '<p class="muted">Cloud saves are unavailable right now. Your saves in each browser are not affected.</p>'
+    elif not games:
+        body = (
+            '<p class="muted">No game backs up saves to this account yet. Turn it on from a game\'s '
+            "<strong>Saves</strong> button.</p>"
+        )
+    else:
+        sections = []
+        for game in games:
+            rows = []
+            for version in game["versions"]:
+                href = "/account/saves/download?%s" % _e(
+                    "slug=%s&store=%s&id=%d" % (game["slug"], game["store"], version["id"])
+                )
+                rows.append(
+                    "<li>%s &middot; %s &middot; %d save(s), %s%s &middot; <a href=\"%s\">Download</a></li>"
+                    % (
+                        _e(version["createdAt"].replace("T", " ")[:16] + " UTC"),
+                        _e(version["deviceLabel"]),
+                        version["unitCount"],
+                        _e(_size(version["totalSize"])),
+                        " &middot; kept twice (merged)" if version["kind"] == "merge" else "",
+                        href,
+                    )
+                )
+            more = (
+                '<p class="hint">Showing the newest %d of %d versions.</p>' % (len(game["versions"]), game["count"])
+                if game["count"] > len(game["versions"])
+                else ""
+            )
+            sections.append(
+                """<div class="card" style="margin-bottom:1rem">
+<h2 style="font-size:1.1rem;margin:0">%s</h2>
+<p class="muted">%s &middot; %s stored. Each version below is a file the game's
+<strong>Saves &rarr; Load saves from a file</strong> accepts.</p>
+<ul>%s</ul>%s
+<form method="post" action="/account/saves/delete">%s
+<input type="hidden" name="slug" value="%s"><input type="hidden" name="store" value="%s">
+<label for="confirm-%s">Type <strong>delete</strong> to delete every cloud version of this game</label>
+<input id="confirm-%s" name="confirm" type="text" autocomplete="off" required>
+<p class="hint">Download what you want to keep first. The saves in your browsers are not touched.</p>
+<button class="danger" type="submit">Delete this game's cloud saves</button>
+</form></div>"""
+                % (
+                    _e(game["title"]),
+                    "Backing up" if game["enrolled"] else "Not backing up",
+                    _e(_size(game["storedBytes"])),
+                    "".join(rows) or "<li>No versions yet.</li>",
+                    more,
+                    '<input type="hidden" name="csrf" value="%s">' % _e(csrf),
+                    _e(game["slug"]),
+                    _e(game["store"]),
+                    _e(game["slug"]),
+                    _e(game["slug"]),
+                )
+            )
+        body = "".join(sections)
+    return page(
+        "Cloud saves",
+        """<h1>Cloud saves</h1>%s%s
+<p class="hint"><a href="/account">Back to your account</a></p>"""
+        % (_message(error, notice), body),
     )
 
 
