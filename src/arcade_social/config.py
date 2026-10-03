@@ -5,6 +5,8 @@ reviewed files the service reads from the gateway repository:
   games.yaml   arcade's registry (which games exist, their slugs and aliases);
                it decides which origins may call the service (RFC 0013 §2)
   boards.yaml  each game's leaderboards and achievements (RFC 0014 §1)
+  saves.yaml   which games keep cloud saves, and their limits (RFC 0016 §2);
+               optional: a missing file means no game has cloud saves
 
 Both are reloaded when they change on disk. A file that no longer parses is
 logged and the last good copy stays in force, as arcade does with games.yaml.
@@ -17,6 +19,7 @@ from urllib.parse import urlparse
 
 from arcade_social import boards as boardsModule
 from arcade_social import registry as registryModule
+from arcade_social import savesconfig as savesConfigModule
 
 
 def log(message):
@@ -29,6 +32,15 @@ def _flag(value):
 
 def _names(value):
     return tuple(name.strip().lower() for name in (value or "").split(",") if name.strip())
+
+
+def _accounts(value):
+    """ARCADE_SOCIAL_SAVES_ACCOUNTS: "*" is everyone (None); otherwise the
+    listed usernames. Unset or empty is nobody, so turning saves on never
+    opens them to every account by accident."""
+    if (value or "").strip() == "*":
+        return None
+    return frozenset(_names(value))
 
 
 class ConfigError(ValueError):
@@ -57,6 +69,12 @@ class Config(object):
         validateCacheSeconds=60,
         userauthTimeout=5.0,
         defaultReturn="https://danielstephenson.dev/play",
+        savesMode="off",
+        savesAccounts=frozenset(),
+        savesDatabasePath="/data/saves.sqlite3",
+        savesConfigPath="/config/play/saves.yaml",
+        savesPlayerMaxBytes=300 * 1024 * 1024,
+        savesDatabaseMaxBytes=10 * 1024 * 1024 * 1024,
     ):
         parsed = urlparse(publicUrl)
         if parsed.scheme not in ("https", "http") or not parsed.hostname or parsed.path not in ("", "/"):
@@ -84,6 +102,15 @@ class Config(object):
         self.validateCacheSeconds = min(60, int(validateCacheSeconds))
         self.userauthTimeout = float(userauthTimeout)
         self.defaultReturn = defaultReturn
+        savesMode = str(savesMode).strip().lower()
+        if savesMode not in ("off", "readonly", "on"):
+            raise ConfigError("ARCADE_SOCIAL_SAVES must be off, readonly or on, got %r" % savesMode)
+        self.savesMode = savesMode
+        self.savesAccounts = savesAccounts if savesAccounts is None else frozenset(n.lower() for n in savesAccounts)
+        self.savesDatabasePath = savesDatabasePath
+        self.savesConfigPath = savesConfigPath
+        self.savesPlayerMaxBytes = int(savesPlayerMaxBytes)
+        self.savesDatabaseMaxBytes = int(savesDatabaseMaxBytes)
 
     @classmethod
     def fromEnvironment(cls, environ=None):
@@ -111,6 +138,12 @@ class Config(object):
                 validateCacheSeconds=int(get("VALIDATE_CACHE_SECONDS", "60")),
                 userauthTimeout=float(get("USERAUTH_TIMEOUT", "5")),
                 defaultReturn=get("DEFAULT_RETURN", "https://danielstephenson.dev/play"),
+                savesMode=get("SAVES", "off"),
+                savesAccounts=_accounts(get("SAVES_ACCOUNTS", "")),
+                savesDatabasePath=get("SAVES_DB", "/data/saves.sqlite3"),
+                savesConfigPath=get("SAVES_CONFIG", "/config/play/saves.yaml"),
+                savesPlayerMaxBytes=int(get("SAVES_PLAYER_MAX_BYTES", str(300 * 1024 * 1024))),
+                savesDatabaseMaxBytes=int(get("SAVES_DB_MAX_BYTES", str(10 * 1024 * 1024 * 1024))),
             )
         except ValueError as e:
             if isinstance(e, ConfigError):
@@ -132,10 +165,19 @@ class FileHolder(object):
         self._value = empty
         self.refresh(initial=True)
 
+    optional = False
+
     def refresh(self, initial=False):
         try:
             mtime = os.stat(self.path).st_mtime_ns
         except OSError as e:
+            if self.optional and not os.path.exists(self.path):
+                # An optional file that is absent is the empty value (saves.yaml
+                # before the gateway adds one); one that was there and went away
+                # keeps the last good value, as any unreadable file does.
+                if initial:
+                    log("%s absent: %s" % (self.path, self._describe(self._value)))
+                    return
             if initial:
                 raise
             log("%s unreadable, keeping the last good one: %s" % (self.path, e))
@@ -178,4 +220,18 @@ def boardsHolder(config):
         boardsModule.Declarations({}),
         lambda loaded: "%d game(s) with boards or achievements" % len(loaded),
         (boardsModule.BoardsError,),
+    )
+
+
+class OptionalFileHolder(FileHolder):
+    optional = True
+
+
+def savesHolder(config):
+    return OptionalFileHolder(
+        config.savesConfigPath,
+        savesConfigModule.load,
+        savesConfigModule.SavesConfig({}),
+        lambda loaded: "%d game(s) with cloud saves" % len(loaded),
+        (savesConfigModule.SavesConfigError,),
     )

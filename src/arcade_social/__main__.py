@@ -3,14 +3,18 @@
 
     python -m arcade_social serve
     python -m arcade_social backup FILE              (online copy of the live database)
+    python -m arcade_social backup-saves FILE        (online copy of the cloud-saves database)
     python -m arcade_social migrate                  (apply migrations and exit)
-    python -m arcade_social check-config [--registry games.yaml] [--boards boards.yaml]
+    python -m arcade_social check-config [--registry games.yaml] [--boards boards.yaml] [--saves saves.yaml]
     python -m arcade_social admin entry ID
     python -m arcade_social admin delete-entry ID
     python -m arcade_social admin exclude USERNAME [--reason TEXT]
     python -m arcade_social admin unexclude USERNAME
     python -m arcade_social admin delete-likes USERNAME
     python -m arcade_social admin log SLUG BOARD [--limit N]
+    python -m arcade_social admin saves-usage USERNAME
+    python -m arcade_social admin saves-versions USERNAME SLUG STORE
+    python -m arcade_social admin saves-check    (integrity_check and row counts of the saves file)
 
 Every command reads the ARCADE_SOCIAL_* variables (the database path from
 ARCADE_SOCIAL_DB), so on the gateway they run inside the container:
@@ -22,8 +26,9 @@ import json
 import os
 import sys
 
-from arcade_social import __version__, boards, registry
+from arcade_social import __version__, boards, registry, savesconfig
 from arcade_social.config import Config, ConfigError, log
+from arcade_social.saves_store import SavesStore
 from arcade_social.store import SchemaTooNew, Store
 
 
@@ -36,6 +41,18 @@ def serve(arguments):
     port = int(os.environ.get("ARCADE_SOCIAL_PORT", "8080"))
     server = makeServer(social, host, port)
     before, after = social.store.migrated
+    savesBefore, savesAfter = social.savesStore.migrated
+    log(
+        "cloud saves %s (database %s, schema %d%s; config %s; accounts: %s)"
+        % (
+            config.savesMode,
+            config.savesDatabasePath,
+            savesAfter,
+            "" if savesBefore == savesAfter else ", migrated from %d" % savesBefore,
+            config.savesConfigPath,
+            "everyone" if config.savesAccounts is None else "%d listed" % len(config.savesAccounts),
+        )
+    )
     log(
         "arcade-social %s on %s:%d for %s (database %s, schema %d%s; registry %s; boards %s; userauth %s; "
         "%d operator(s))"
@@ -71,10 +88,31 @@ def backup(arguments):
     return 0
 
 
+def _savesStore():
+    return SavesStore(Config.fromEnvironment().savesDatabasePath)
+
+
+def backupSaves(arguments):
+    if os.path.exists(arguments.file):
+        print("backup-saves: %s exists; refusing to overwrite it" % arguments.file, file=sys.stderr)
+        return 1
+    store = _savesStore()
+    store.backup(arguments.file)
+    copy = SavesStore(arguments.file)
+    check = copy.integrityCheck()
+    if check != "ok":
+        print("backup-saves: the copy failed integrity_check: %s" % check, file=sys.stderr)
+        return 1
+    print("backed up to %s (integrity_check ok; rows %s)" % (arguments.file, json.dumps(copy.counts(), sort_keys=True)))
+    return 0
+
+
 def migrate(arguments):
     store = _store()
     before, after = store.migrated
     print("schema version %d%s" % (after, "" if before == after else " (was %d)" % before))
+    savesBefore, savesAfter = _savesStore().migrated
+    print("saves schema version %d%s" % (savesAfter, "" if savesBefore == savesAfter else " (was %d)" % savesBefore))
     return 0
 
 
@@ -86,6 +124,13 @@ def checkConfig(arguments):
     loadedBoards = boards.load(boardsPath)
     print("%s: %d game(s) OK" % (registryPath, len(loadedRegistry)))
     print("%s: %d game(s) OK" % (boardsPath, len(loadedBoards)))
+    savesPath = arguments.saves or config.savesConfigPath
+    if arguments.saves or os.path.exists(savesPath):
+        loadedSaves = savesconfig.load(savesPath)
+        print("%s: %d game(s) OK" % (savesPath, len(loadedSaves)))
+        unknown = [slug for slug in loadedSaves if loadedRegistry.get(slug) is None]
+        if unknown:
+            print("note: cloud saves declared but not in the registry: %s" % ", ".join(unknown))
     missing = [slug for slug in loadedBoards if loadedRegistry.get(slug) is None]
     if missing:
         # Not an error: a game may have left the registry while its records stay.
@@ -118,6 +163,23 @@ def admin(arguments):
     if action == "log":
         print(json.dumps(store.submissionLog(arguments.slug, arguments.board, arguments.limit), indent=2))
         return 0
+    if action == "saves-check":
+        saves = _savesStore()
+        check = saves.integrityCheck()
+        print("integrity_check: %s; rows %s" % (check, json.dumps(saves.counts(), sort_keys=True)))
+        return 0 if check == "ok" else 1
+    if action in ("saves-usage", "saves-versions"):
+        player = store.player(arguments.username.lower())
+        if player is None:
+            print("no such player")
+            return 1
+        saves = _savesStore()
+        if action == "saves-usage":
+            print(json.dumps(saves.games(player["id"]), indent=2, sort_keys=True))
+            return 0
+        versions = saves.versions(player["id"], arguments.slug, arguments.store)
+        print(json.dumps(versions, indent=2, sort_keys=True))
+        return 0
     return 2
 
 
@@ -129,10 +191,13 @@ def main(argv=None):
     commands.add_parser("serve", help="run the server (configured by ARCADE_SOCIAL_* variables)")
     backupCommand = commands.add_parser("backup", help="write an online copy of the database to FILE")
     backupCommand.add_argument("file")
+    backupSavesCommand = commands.add_parser("backup-saves", help="write an online copy of the saves database to FILE")
+    backupSavesCommand.add_argument("file")
     commands.add_parser("migrate", help="apply schema migrations and exit")
-    check = commands.add_parser("check-config", help="validate games.yaml and boards.yaml")
+    check = commands.add_parser("check-config", help="validate games.yaml, boards.yaml and saves.yaml")
     check.add_argument("--registry")
     check.add_argument("--boards")
+    check.add_argument("--saves")
 
     adminCommand = commands.add_parser("admin", help="operator tools")
     actions = adminCommand.add_subparsers(dest="action")
@@ -150,12 +215,26 @@ def main(argv=None):
     logCommand.add_argument("slug")
     logCommand.add_argument("board")
     logCommand.add_argument("--limit", type=int, default=100)
+    actions.add_parser("saves-check")
+    usage = actions.add_parser("saves-usage")
+    usage.add_argument("username")
+    versionsCommand = actions.add_parser("saves-versions")
+    versionsCommand.add_argument("username")
+    versionsCommand.add_argument("slug")
+    versionsCommand.add_argument("store")
 
     arguments = parser.parse_args(argv)
-    handlers = {"serve": serve, "backup": backup, "migrate": migrate, "check-config": checkConfig, "admin": admin}
+    handlers = {
+        "serve": serve,
+        "backup": backup,
+        "backup-saves": backupSaves,
+        "migrate": migrate,
+        "check-config": checkConfig,
+        "admin": admin,
+    }
     try:
         return handlers[arguments.command](arguments)
-    except (registry.RegistryError, boards.BoardsError, ConfigError, SchemaTooNew) as e:
+    except (registry.RegistryError, boards.BoardsError, savesconfig.SavesConfigError, ConfigError, SchemaTooNew) as e:
         print("arcade-social: %s" % e, file=sys.stderr)
         return 1
 

@@ -69,6 +69,31 @@ BOARDS_YAML = """games:
         max: 3600
 """
 
+SAVES_YAML = """games:
+  fishe:
+    mode: on
+    store: fishe-saves
+    format: tak-saves
+    root: /saves
+    pull: true
+    maxUploadBytes: 200000
+    maxStoredBytes: 600000
+  tidewater:
+    mode: on
+    store: tidewater-saves
+    format: tak-saves
+    root: /saves
+    maxUploadBytes: 200000
+    maxStoredBytes: 600000
+  frog-hopper:
+    mode: readonly
+    store: frog-saves
+    format: tak-saves
+    root: /saves
+    maxUploadBytes: 200000
+    maxStoredBytes: 600000
+"""
+
 WRITE_HEADERS = {"Content-Type": "application/json", "X-Play-Client": "1"}
 
 
@@ -164,7 +189,20 @@ class Client(object):
 
 
 class Env(object):
-    def __init__(self, tmpPath, operators=("boss",), clock=None, store=None, gamesYaml=GAMES_YAML, boardsYaml=BOARDS_YAML):
+    def __init__(
+        self,
+        tmpPath,
+        operators=("boss",),
+        clock=None,
+        store=None,
+        gamesYaml=GAMES_YAML,
+        boardsYaml=BOARDS_YAML,
+        savesYaml=SAVES_YAML,
+        savesMode="off",
+        savesAccounts=None,
+        savesPlayerMaxBytes=10 * 1024 * 1024,
+        savesStore=None,
+    ):
         self.fake = FakeUserAuth().start()
         self.registryPath = os.path.join(str(tmpPath), "games.yaml")
         self.boardsPath = os.path.join(str(tmpPath), "boards.yaml")
@@ -172,6 +210,10 @@ class Env(object):
             handle.write(gamesYaml)
         with open(self.boardsPath, "w") as handle:
             handle.write(boardsYaml)
+        self.savesPath = os.path.join(str(tmpPath), "saves.yaml")
+        if savesYaml is not None:
+            with open(self.savesPath, "w") as handle:
+                handle.write(savesYaml)
         self.config = Config(
             publicUrl=SERVICE,
             portalOrigin=PORTAL,
@@ -179,12 +221,17 @@ class Env(object):
             registryPath=self.registryPath,
             boardsPath=self.boardsPath,
             databasePath=os.path.join(str(tmpPath), "social.sqlite3"),
+            savesDatabasePath=os.path.join(str(tmpPath), "saves.sqlite3"),
+            savesConfigPath=self.savesPath,
+            savesMode=savesMode,
+            savesAccounts=savesAccounts,
+            savesPlayerMaxBytes=savesPlayerMaxBytes,
             userauthUrl=self.fake.url,
             operators=operators,
             trustForwardedFor=True,
             defaultReturn=PORTAL + "/play",
         )
-        self.social = Social(self.config, store=store)
+        self.social = Social(self.config, store=store, savesStore=savesStore)
         self.server = makeServer(self.social, "127.0.0.1", 0)
         self.port = self.server.server_address[1]
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)

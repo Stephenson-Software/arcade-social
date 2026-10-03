@@ -1,16 +1,17 @@
 # arcade-social
 
-Sign-in, high scores, achievements and likes for the browser games on
+Sign-in, high scores, achievements, likes and cloud saves for the browser games on
 [danielstephenson.dev/play](https://danielstephenson.dev/play), served from
 `https://api.play.danielstephenson.dev`.
 
-It implements three Stephenson-Software RFCs:
+It implements four Stephenson-Software RFCs:
 
 | RFC | What this service does with it |
 |---|---|
-| 0013 Cloud saves | **Only §1–§2, the sign-in design.** Cloud saves themselves are deferred: the owner chose save export/import first (2026-10-03). |
+| 0013 Cloud saves | **Only §1–§2, the sign-in design.** Its §3–§6 are superseded by RFC 0016. |
 | 0014 Scores and achievements | The service side (§1 declarations, §3 API, §4 Tier 0 checks). |
 | 0015 Likes | The service side (§1 data model, §2 API). |
+| 0016 Cloud saves | The service side: a second SQLite file, append-only versions, 409/422 guards, the kill switch (§3, §4.1, §6–§8). Off unless `ARCADE_SOCIAL_SAVES=on`. |
 
 It is one small stdlib-Python process with one SQLite database (WAL mode) on a volume, in the
 same shape as [arcade](https://github.com/Stephenson-Software/arcade): no dependencies, nothing to
@@ -30,6 +31,7 @@ can (sign-in, declared boards, bounds, rate caps) and labels every leaderboard r
 - [boards.yaml](#boardsyaml)
 - [Display names](#display-names)
 - [Rate limits](#rate-limits)
+- [Cloud saves](#cloud-saves)
 - [Privacy and deletion](#privacy-and-deletion)
 - [Configuration](#configuration)
 - [Running on the gateway](#running-on-the-gateway)
@@ -303,6 +305,77 @@ and are lost on restart.
 also let every other internal caller choose its own key; it is off by default and not recommended without a
 UserAuth change that trusts the header from this service alone.
 
+## Cloud saves
+
+RFC 0016. **Off by default** (`ARCADE_SOCIAL_SAVES=off`). A signed-in player turns it on per game from the
+game's own Saves panel; the page keeps playing from its local store exactly as before, and the cloud is a
+history of copies that never sits in the save path.
+
+**What is stored.** In its own file, `/data/saves.sqlite3` (never `arcade-social.sqlite3`): every version a
+page uploads, append-only, each with the version it was based on (`parent`). A version is the game's own
+save file (`{"format": "tak-saves", "version": 1, "game": "<store>", "files": {...}}`, what "Download my
+saves" writes), split into *units*: the first path segment under the game's root (`slot_3` for a
+`SaveFileManager` game). A unit is stored once per player by the SHA-256 of its canonical encoding
+(compact JSON, sorted keys, UTF-8). Nothing is ever pruned automatically, and nothing makes room by
+deleting an old version.
+
+**API** (only from the game's own page; the game is the request's `Origin`, never a parameter;
+writes need `Content-Type: application/json` and `X-Play-Client: 1` like every write):
+
+| Method | Path | |
+|---|---|---|
+| `GET` | `/v1/saves/<store>` | `{enrolled, allowed, writable, reason, pull, quota, head?}`. `head` is present only when enrolled; `head: null` (with 200) means "enrolled, nothing uploaded yet". **Any other answer is "unknown", never "empty".** |
+| `POST` / `DELETE` | `/v1/saves/<store>/enroll` | Turn backing up on / off. Turning it off keeps every version. |
+| `PUT` | `/v1/saves/<store>` | Upload `{parent, device, deviceLabel, kind, file, confirmRemoved?, confirmShrink?}` |
+| `GET` | `/v1/saves/<store>/versions` | Newest first, with units, sizes, device labels |
+| `GET` | `/v1/saves/<store>/versions/<id>` | That version as a save file (`?download=1` for an attachment) |
+| `POST` | `/v1/saves/<store>/versions/<id>/pin` | Mark a version to keep |
+| `DELETE` | `/v1/saves/<store>` | `{"confirm": "delete"}`: every version of this game for this player |
+
+**Upload rules**, in order; a refusal writes nothing (each error carries a machine-readable `saves` code):
+
+| Answer | `saves` | When |
+|---|---|---|
+| 400 | `invalid` | The save file fails the games' own import validation: format, version 1, `game` = store, every path under the root with no empty/`.`/`..` part, control character or backslash, ≤ 5000 files, contents text or `{"base64"}` |
+| 409 | `stale` | `parent` is not the current head (also `null` when a head exists). Carries `head`. The page merges (keep both) and uploads again; there is no last-write-wins anywhere |
+| 422 | `removed` / `confirm-mismatch` | The upload leaves out a unit head has, unless `confirmRemoved` names exactly the units left out (the page sends it only for slots the game itself deleted) |
+| 422 | `shrink` | Nothing left out, but less than half head's size, unless `confirmShrink` (the player confirmed it) |
+| 413 | `quota` / `too-large` | Per game per player (`maxStoredBytes`), per player (`ARCADE_SOCIAL_SAVES_PLAYER_MAX_BYTES`), or one upload (`maxUploadBytes`, refused before the body is read) |
+| 429 | `rate` | More than 120 uploads per hour per player per game |
+| 503 | `off` / `paused` / `full` | Kill switch, a read-only game, or the database at `ARCADE_SOCIAL_SAVES_DB_MAX_BYTES` |
+| 200 | | The content equals head's: nothing stored, `{"id": head, "created": false}` |
+| 201 | | A new version; head moved to it (compare-and-set in the same transaction) |
+
+**Switches.** `ARCADE_SOCIAL_SAVES=off|readonly|on`: `readonly` refuses uploads, enrollment and pins
+(503 `paused`) and keeps reads, downloads and deletion; `off` answers 503 `off` on every saves endpoint.
+`ARCADE_SOCIAL_SAVES_ACCOUNTS` lists the usernames that may enroll and upload: unset or empty is
+**nobody**, `*` is everyone. `config/play/saves.yaml` (below) turns each game on or read-only.
+
+**saves.yaml** (`ARCADE_SOCIAL_SAVES_CONFIG`, default `/config/play/saves.yaml`; optional: a missing file
+means no game is writable), parsed strictly and reloaded on change, like boards.yaml:
+
+```yaml
+games:
+  night-ferry:
+    mode: on                    # on | readonly
+    store: night-ferry-saves    # the save file's `game`: the page's IndexedDB name
+    format: tak-saves           # tak-saves | roam-saves
+    root: /saves
+    pull: true                  # Stage 2: pages may pull newer versions automatically (fast-forward)
+    maxUploadBytes: 2097152
+    maxStoredBytes: 26214400
+```
+
+A game that leaves the file, or is `mode: readonly`, keeps what it has: versions stay listed and
+downloadable and can be deleted. **The account page** `/account/saves` lists every version with a download
+(a file the game's "Load saves from a file" accepts) and a typed delete per game; it has no script.
+
+**The client side** (merging per unit, keep-both, carry-forward of units a session lost track of, pulls as
+imports with a local backup first) is in the games' runtime (tak `/tak/cloud.js`). `tests/savesclient.py`
+is a reference copy of that algorithm, and `tests/test_saves_protocol.py` runs it as three devices
+through random histories against these rules, checking after every step that no committed save is lost
+(`SAVES_PROTOCOL_SEEDS`, default 400).
+
 ## Privacy and deletion
 
 - **Held:** the UserAuth username (private), a display name, best scores, a 90-day submission log, unlocks,
@@ -310,8 +383,13 @@ UserAuth change that trusts the header from this service alone.
 - **Not held:** passwords (forwarded to UserAuth, never stored or logged), IP addresses (only in rate-limit
   memory, for at most one window), user agents, device identifiers. There is no access log.
 - **Export:** `/account/export` gives the player everything held about them.
-- **Deletion:** `/account/delete` or `DELETE /v1/me` removes the player row and, by cascade, every score,
-  submission, unlock, like and held name, immediately. `DELETE /v1/me/<slug>` removes one game's scores and
+- **Cloud saves** (RFC 0016), only for a player who turned them on: the save files a game's page uploaded,
+  per version, with a random device id, a device label, the uploading origin and times. No IP address or
+  user agent.
+- **Deletion:** `/account/delete` or `DELETE /v1/me` removes the player's cloud saves (from
+  `saves.sqlite3`, first) and then the player row and, by cascade, every score, submission, unlock, like and
+  held name, immediately. `/account/saves` or `DELETE /v1/saves/<store>` removes one game's cloud saves;
+  a browser's own saves are never touched by either. `DELETE /v1/me/<slug>` removes one game's scores and
   unlocks. An exclusion the operator made is moderation data and is kept. Backups age out on the backup
   set's own schedule.
 - **UserAuth has no account deletion** (its controllers cover register, login, logout, password, session and
@@ -341,6 +419,12 @@ Environment variables, all optional:
 | `ARCADE_SOCIAL_LOG_RETENTION_DAYS` | `90` | Score submission log retention |
 | `ARCADE_SOCIAL_DEFAULT_RETURN` | `https://danielstephenson.dev/play` | Where sign-in returns when `return` is missing or refused |
 | `ARCADE_SOCIAL_HOST` / `ARCADE_SOCIAL_PORT` | `0.0.0.0` / `8080` | Listen address |
+| `ARCADE_SOCIAL_SAVES` | `off` | Cloud saves: `off`, `readonly` or `on` (RFC 0016 §7) |
+| `ARCADE_SOCIAL_SAVES_ACCOUNTS` | (nobody) | Usernames that may enroll and upload, comma-separated; `*` for everyone |
+| `ARCADE_SOCIAL_SAVES_DB` | `/data/saves.sqlite3` | The cloud-saves database (a second file) |
+| `ARCADE_SOCIAL_SAVES_CONFIG` | `/config/play/saves.yaml` | Which games keep cloud saves |
+| `ARCADE_SOCIAL_SAVES_PLAYER_MAX_BYTES` | `314572800` | Stored per player across games, after dedupe |
+| `ARCADE_SOCIAL_SAVES_DB_MAX_BYTES` | `10737418240` | At this size uploads stop for everyone (503 `full`); nothing is deleted |
 
 No secret is needed: the service holds no JWT secret (it asks UserAuth) and no API key.
 
@@ -360,6 +444,8 @@ Not deployed yet. What a gateway PR needs:
   (the same directory arcade mounts; mount the directory, not the file, because git replaces files by
   rename) and `./config/play:/config/play:ro`.
 - **A new file** `config/play/boards.yaml` (start from `games: {}` or from the example).
+- **Cloud saves** (optional): `config/play/saves.yaml` and `ARCADE_SOCIAL_SAVES` / `ARCADE_SOCIAL_SAVES_ACCOUNTS`.
+  Their database, `/data/saves.sqlite3`, is on the same volume and needs its own backup (`backup-saves`).
 - **Healthcheck:** the image has one (`/healthz`), or copy arcade's compose healthcheck.
 - **Backups:** add the volume to the gateway's backup set (see Backups).
 
@@ -378,6 +464,14 @@ docker cp arcade-social:/data/backup-$(date +%F).sqlite3 .
 The command refuses to overwrite an existing file. Do not copy the live `.sqlite3` file directly: in WAL
 mode recent commits may still be in the `-wal` file.
 
+Cloud saves live in a second file and have their own command, which also runs `PRAGMA integrity_check` on
+the copy and prints its row counts (exit 1 if the check fails):
+
+```sh
+docker exec arcade-social python -m arcade_social backup-saves /data/saves-backup-$(date +%F).sqlite3
+docker exec arcade-social python -m arcade_social admin saves-check
+```
+
 Schema changes are numbered, forward-only migrations recorded in `schema_version`; a number is never reused
 or edited. A database written by a newer version is refused at start (`SchemaTooNew`), so rolling back to an
 older image cannot write to a schema it does not understand: restore the matching backup instead.
@@ -395,6 +489,9 @@ docker exec arcade-social python -m arcade_social admin unexclude someuser
 docker exec arcade-social python -m arcade_social admin delete-likes someuser
 docker exec arcade-social python -m arcade_social migrate
 docker exec arcade-social python -m arcade_social check-config
+docker exec arcade-social python -m arcade_social admin saves-usage someuser
+docker exec arcade-social python -m arcade_social admin saves-versions someuser night-ferry night-ferry-saves
+docker exec arcade-social python -m arcade_social admin saves-check
 ```
 
 ## Decisions
@@ -406,6 +503,13 @@ recommended ("RFC recommendation taken"). Anything the RFCs did not settle is ma
 |---|---|---|
 | Build scores/achievements (0014 OQ1) and likes (0015 OQ1)? | Both, now | Owner |
 | Cloud saves (0013 OQ1)? | Not now: save export/import first | Owner |
+| Cloud saves (0016 OQ1, 2026-10-03) | Build both Stage 1 (backup + manual load) and Stage 2 (fast-forward pulls) | Owner |
+| Where cloud saves live (0016 OQ2) | Here, in a second SQLite file, behind `ARCADE_SOCIAL_SAVES` | RFC recommendation taken |
+| Who may use them before an off-box backup exists (0016 OQ3) | Only the accounts in `ARCADE_SOCIAL_SAVES_ACCOUNTS` (the owner and the test account) | RFC recommendation taken |
+| Quotas (0016 OQ4) | Set per game in saves.yaml after real save sizes are measured | RFC recommendation taken |
+| Deletions (0016 OQ5) | Never propagated automatically | RFC recommendation taken |
+| First game (0016 OQ7) | Night Ferry | Owner |
+| Automatic pruning (0016 §6) | Not built: every version is kept until the player deletes it (a superset of the retention promise) | Implementation |
 | New service or arcade (0013 OQ2, 0015 OQ5)? | One new small service for sign-in, scores, achievements, likes | Owner |
 | Stack (0013 OQ3) | stdlib Python + SQLite (WAL) | Owner |
 | Hostname (0013 OQ4) | `api.play.danielstephenson.dev` | Owner |

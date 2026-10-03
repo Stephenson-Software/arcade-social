@@ -1,0 +1,14 @@
+# Cloud saves (RFC 0016 §2, §6). The real file is the gateway's
+# config/play/saves.yaml, reviewed like a board is. A game that is not listed
+# (or is `mode: readonly`) keeps what it has - versions can be listed,
+# downloaded and deleted - but nothing new is enrolled or uploaded.
+# This is an example.
+games:
+  fishe:
+    mode: on
+    store: fishe-saves          # the save file's `game`: the page's IndexedDB name
+    format: tak-saves
+    root: /saves
+    pull: true                  # Stage 2: pages pull newer versions automatically (fast-forward only)
+    maxUploadBytes: 2097152     # one upload: the save file's JSON text
+    maxStoredBytes: 26214400    # every version of this game for one player, after dedupe

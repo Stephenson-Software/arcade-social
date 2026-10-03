@@ -25,6 +25,7 @@ ARCADE_REGISTRY_SHA256 = "175ab28ffec871691ea095f2ee10422fc298c0f6e3f854d92c3f37
 def database(tmp_path, monkeypatch):
     path = str(tmp_path / "db.sqlite3")
     monkeypatch.setenv("ARCADE_SOCIAL_DB", path)
+    monkeypatch.setenv("ARCADE_SOCIAL_SAVES_DB", str(tmp_path / "saves.sqlite3"))
     return path
 
 

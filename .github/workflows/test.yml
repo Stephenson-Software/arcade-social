@@ -22,8 +22,8 @@ jobs:
           python-version: ${{ matrix.python-version }}
       - run: python -m pip install --upgrade pip pytest
       - run: python -m pytest -v
-      - name: The example registry and boards are valid
-        run: PYTHONPATH=src python -m arcade_social check-config --registry examples/games.yaml --boards examples/boards.yaml
+      - name: The example registry, boards and saves are valid
+        run: PYTHONPATH=src python -m arcade_social check-config --registry examples/games.yaml --boards examples/boards.yaml --saves examples/saves.yaml
 
   js-client:
     runs-on: ubuntu-latest
