@@ -3,6 +3,15 @@
 All notable changes to this project are documented in this file. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and the project uses semantic versioning.
 
+## [Unreleased]
+
+### Added
+
+- `clients/js/arcade-scores.js`: a vendorable, dependency-free browser client (under 3 KB) for static games:
+  `submit`/`submitScore`, `unlock`, `whoami`, `top` and `signIn`. Sends only from a
+  `https://<slug>.play.danielstephenson.dev` page for a signed-in player, never throws, retries a failed
+  report once. Tested under `node --test` in CI (new `js-client` job).
+
 ## [0.1.0] - 2026-10-03
 
 ### Added

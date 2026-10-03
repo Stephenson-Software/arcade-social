@@ -36,6 +36,7 @@ can (sign-in, declared boards, bounds, rate caps) and labels every leaderboard r
 - [Backups](#backups)
 - [Operator tools](#operator-tools)
 - [Decisions](#decisions)
+- [Game clients](#game-clients)
 - [Development](#development)
 
 ## How sign-in works
@@ -426,10 +427,24 @@ recommended ("RFC recommendation taken"). Anything the RFCs did not settle is ma
 | Exclusions | A table keyed by username, as RFC 0014 §3 | RFC |
 | Registration | Proxied (UserAuth's `POST /register` is public); no email asked | Implementation |
 
+## Game clients
+
+Games do not need to hand-write the calls above:
+
+- **tak games:** `tak.arcade.submitScore(board, value)` / `tak.arcade.unlock(id)` in
+  [tak](https://github.com/Stephenson-Software/tak) (the Worker hands each report to the page, which sends it).
+- **Every other kind** (pygbag, Emscripten, CheerpJ, plain JavaScript): vendor
+  [`clients/js/arcade-scores.js`](clients/js/README.md), under 3 KB with no build step:
+  `ArcadeScores.submit`, `unlock`, `whoami`, `top` and `signIn`.
+
+Both send only from a `https://<slug>.play.danielstephenson.dev` page and only for a signed-in player, never
+throw, never block the game, and retry a failed report once.
+
 ## Development
 
 ```sh
 python -m pytest -q                       # Python 3.8+; stdlib only, pytest for the tests
+node --test clients/js/arcade-scores.test.js   # the vendored JS client (Node 20+)
 PYTHONPATH=src python -m arcade_social check-config --registry examples/games.yaml --boards examples/boards.yaml
 ```
 

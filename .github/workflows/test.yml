@@ -25,6 +25,16 @@ jobs:
       - name: The example registry and boards are valid
         run: PYTHONPATH=src python -m arcade_social check-config --registry examples/games.yaml --boards examples/boards.yaml
 
+  js-client:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: arcade-scores.js (clients/js)
+        run: node --test clients/js/arcade-scores.test.js
+
   docker:
     runs-on: ubuntu-latest
     steps:
