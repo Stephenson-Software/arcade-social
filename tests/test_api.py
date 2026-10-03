@@ -435,6 +435,9 @@ def test_operator_endpoints(env):
     assert boss.api("POST", "/v1/admin/exclude/cheater", origin=PORTAL, payload={}).status == 403
     assert boss.api("POST", "/v1/admin/exclude/cheater", origin=FISHE, payload={}).status == 403
     assert boss.request("POST", "/v1/admin/exclude/cheater", origin=SERVICE, body="{}").status == 403
+    # Without any Origin, even with the CSRF headers.
+    assert boss.request("POST", "/v1/admin/exclude/cheater", headers=WRITE_HEADERS, body="{}").status == 403
+    assert env.social.store.exclusions() == []
     assert cheat.api("POST", "/v1/admin/exclude/cheater", origin=SERVICE, payload={}).status == 403
     excluded = boss.api("POST", "/v1/admin/exclude/Cheater", origin=SERVICE, payload={"reason": "forged"})
     assert excluded.json() == {"excluded": "cheater"}

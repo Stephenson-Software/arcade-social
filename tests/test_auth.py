@@ -281,7 +281,8 @@ def test_signin_is_rate_limited_per_client_ip_before_userauth(env):
     """UserAuth sees one client (this service); the service limits each player."""
     env.fake.addUser("alice", PASSWORD)
     attacker = env.client(ip="192.0.2.66")
-    statuses = [attacker.signIn("alice", "Wrong-pass-%d" % index).status for index in range(12)]
+    # A different username each time, so only the per-IP limit can stop it.
+    statuses = [attacker.signIn("user%d" % index, "Wrong-pass-%d" % index).status for index in range(12)]
     assert statuses[:10] == [401] * 10
     assert statuses[10:] == [429, 429]
     assert env.fake.count("/login") == 10
