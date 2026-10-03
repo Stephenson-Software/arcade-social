@@ -484,3 +484,21 @@ def test_reads_never_create_a_player_row(env):
     assert client.api("DELETE", "/v1/likes/fishe", origin=PORTAL).json()["liked"] is False
     assert client.api("DELETE", "/v1/me/fishe").json()["deleted"] == 0
     assert env.social.store.player("reader") is None
+
+
+def test_a_registered_game_with_no_declarations_lists_empty_not_404(env):
+    # The portal asks every game page "any boards?"; the usual answer "none"
+    # must be an empty list, not a 404 in the browser console.
+    client = env.client()
+    boards = client.request("GET", "/v1/games/tidewater/boards")
+    assert boards.status == 200
+    assert boards.json()["boards"] == []
+    assert boards.json()["verified"] is False
+    achievements = client.request("GET", "/v1/games/tidewater/achievements")
+    assert achievements.status == 200
+    assert achievements.json()["achievements"] == []
+    # A game arcade does not serve is still unknown.
+    assert client.request("GET", "/v1/games/no-such-game/boards").status == 404
+    assert client.request("GET", "/v1/games/no-such-game/achievements").status == 404
+    # And a board under an undeclaring game is still not a board.
+    assert client.request("GET", "/v1/boards/tidewater/anything").status == 404

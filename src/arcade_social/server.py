@@ -533,6 +533,18 @@ def makeHandler(social):
                 raise ApiError(404, "%s declares no boards or achievements" % slug)
             return declarations
 
+        def _listedDeclarations(self, slug):
+            """For the public listings: a game in arcade's registry that
+            declares nothing has empty lists (200), so a page can ask "does
+            this game have boards?" without a 404 for the common answer "no".
+            A slug arcade does not serve is still a 404."""
+            if not _SLUG.match(slug):
+                raise ApiError(404, "no such game")
+            declarations = social.boards.get(slug)
+            if declarations is None and social.registry.get(slug) is None:
+                raise ApiError(404, "no such game")
+            return declarations
+
         def _board(self, slug, boardId):
             board = self._declarations(slug).board(boardId) if _ID.match(boardId) else None
             if board is None:
@@ -663,10 +675,11 @@ def makeHandler(social):
             )
 
         def apiBoards(self, caller, slug):
-            declarations = self._declarations(slug)
+            declarations = self._listedDeclarations(slug)
+            boards = [board.describe() for board in declarations.listBoards()] if declarations else []
             self._json(
                 200,
-                self._notice({"slug": slug, "boards": [board.describe() for board in declarations.listBoards()]}),
+                self._notice({"slug": slug, "boards": boards}),
                 cache="public, max-age=60",
             )
 
@@ -709,10 +722,10 @@ def makeHandler(social):
             )
 
         def apiAchievements(self, caller, slug):
-            declarations = self._declarations(slug)
+            declarations = self._listedDeclarations(slug)
             players, counts = social.store.achievementShares(slug)
             listed = []
-            for achievement in declarations.listAchievements():
+            for achievement in declarations.listAchievements() if declarations else []:
                 count = counts.get(achievement.id, 0)
                 listed.append(
                     {
