@@ -1,0 +1,21 @@
+[project]
+name = "arcade-social"
+dynamic = ["version"]
+description = "Sign-in, high scores, achievements and likes for arcade games (Stephenson-Software RFCs 0013-0015)."
+requires-python = ">=3.8"
+license = {file = "LICENSE"}
+
+[tool.setuptools.dynamic]
+version = {attr = "arcade_social.__version__"}
+
+[tool.black]
+line-length = 110
+# src/arcade_social/registry.py is vendored byte-for-byte from
+# https://github.com/Stephenson-Software/arcade (src/arcade/registry.py) and kept
+# that way so it stays diffable against upstream: both services must read the
+# gateway's games.yaml identically.
+force-exclude = '''
+/(
+    src/arcade_social/registry\.py
+)$
+'''

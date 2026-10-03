@@ -1,0 +1,21 @@
+# arcade's registry (RFC 0006 §3), as arcade-social reads it: the gateway's
+# config/arcade/games.yaml, mounted read-only. arcade-social uses only the
+# slugs and aliases (which origins may call it, and as which game); the
+# token hashes are arcade's business. This is an example.
+games:
+  - slug: tidewater
+    title: Tidewater
+    repo: Stephenson-Software/Tidewater
+    owner: dmccoystephenson
+    token_sha256: "0000000000000000000000000000000000000000000000000000000000000000"
+    aliases: [tidewater.danielstephenson.dev]
+  - slug: fishe
+    title: FishE
+    repo: Stephenson-Software/FishE
+    token_sha256: "1111111111111111111111111111111111111111111111111111111111111111"
+    aliases: [fishe.danielstephenson.dev]
+  - slug: frog-hopper
+    title: Frog Hopper
+    repo: Stephenson-Software/Frog-Hopper-2D
+    token_sha256: "2222222222222222222222222222222222222222222222222222222222222222"
+    kind: static

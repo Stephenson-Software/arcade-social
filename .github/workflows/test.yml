@@ -1,0 +1,59 @@
+name: Test
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ['3.8', '3.12']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - run: python -m pip install --upgrade pip pytest
+      - run: python -m pytest -v
+      - name: The example registry and boards are valid
+        run: PYTHONPATH=src python -m arcade_social check-config --registry examples/games.yaml --boards examples/boards.yaml
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -t arcade-social:ci .
+      - name: The image serves its health check as a non-root user
+        run: |
+          mkdir -p cfg/arcade cfg/play
+          cp examples/games.yaml cfg/arcade/games.yaml
+          cp examples/boards.yaml cfg/play/boards.yaml
+          docker volume create social-data
+          docker run -d --name social -p 8080:8080 \
+            -v "$PWD/cfg/arcade:/config/arcade:ro" -v "$PWD/cfg/play:/config/play:ro" \
+            -v social-data:/data arcade-social:ci
+          for i in $(seq 1 20); do curl -fsS http://127.0.0.1:8080/healthz && break; sleep 1; done
+          curl -fsS http://127.0.0.1:8080/healthz
+          test "$(docker inspect -f '{{.State.Running}}' social)" = true
+          test "$(docker exec social id -u)" != 0
+      - name: Public reads answer, signed-in reads refuse foreign origins
+        run: |
+          curl -fsS http://127.0.0.1:8080/v1/likes/counts
+          curl -fsS http://127.0.0.1:8080/v1/boards/fishe/most-money | grep -q '"verified": false'
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H 'Origin: https://evil.example' http://127.0.0.1:8080/v1/session)" = 403
+          curl -fsS http://127.0.0.1:8080/signin | grep -q 'Sign in to play'
+      - name: The database is migrated in WAL mode and can be backed up online
+        run: |
+          docker exec social python -m arcade_social migrate | grep -q 'schema version 3'
+          docker exec social python -m arcade_social backup /data/backup.sqlite3
+          docker exec social python -c "import sqlite3; c = sqlite3.connect('/data/arcade-social.sqlite3'); assert c.execute('PRAGMA journal_mode').fetchone()[0] == 'wal'"
+      - name: Logs on failure
+        if: failure()
+        run: docker logs social || true

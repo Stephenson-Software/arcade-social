@@ -1,0 +1,39 @@
+# Leaderboards and achievements (RFC 0014 §1). The real file is the gateway's
+# config/play/boards.yaml, reviewed like a slug is. Board and achievement ids
+# are permanent: never rename one that has been used. This is an example.
+games:
+  fishe:
+    boards:
+      - id: most-money
+        title: Most money in one save
+        order: desc
+        unit: dollars
+        integer: true
+        min: 0
+        max: 100000000
+        maxPerHour: 30
+    achievements:
+      - id: first-catch
+        title: First Catch
+        description: Catch your first fish
+      - id: reached-goal
+        title: Reached Goal
+        description: Reach $10,000
+        hidden: false
+  frog-hopper:
+    boards:
+      - id: fastest-crossing
+        title: Fastest crossing
+        order: asc               # lower is better
+        unit: seconds
+        min: 1.5
+        max: 3600
+        maxPerHour: 60
+    achievements:
+      - id: first-win
+        title: Across
+        description: Reach the far bank
+      - id: no-splash
+        title: Dry Feet
+        description: Cross without falling in once
+        hidden: true
