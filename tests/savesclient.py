@@ -14,6 +14,10 @@ Per device, kept across reloads (localStorage):
     pendingDeleted  {name}: units the game deleted on purpose, not yet uploaded
     deletedElsewhere {name: sha}: local units the cloud no longer has; left
                     out of uploads while unchanged (RFC 0016 §4.5)
+    missing         {name: sha}: units this store lost without the game deleting
+                    them, carried forward from the cloud; if one comes back
+                    with different content (a new game started in a slot that
+                    looked empty), both are kept - it never replaces the lost one
 
 The rules this client keeps, and the test checks:
     - an error is never read as "nothing in the cloud" (§4.6)
@@ -122,7 +126,7 @@ class Device(object):
         self.pull = pull
         self.store = {}  # IndexedDB: {path: content}
         self.backups = []  # <idb>.tak-backups: [{path: content}]
-        self.state = {"sync": None, "pendingDeleted": [], "deletedElsewhere": {}}  # localStorage
+        self.state = {"sync": None, "pendingDeleted": [], "deletedElsewhere": {}, "missing": {}}  # localStorage
         self.sessionFailed = False  # the Worker's restore failed this session (tak's nosave)
         self.paused = None  # why uploads stop until the next load
         self.online = True
@@ -161,7 +165,7 @@ class Device(object):
     def clearSiteData(self):
         self.store = {}
         self.backups = []
-        self.state = {"sync": None, "pendingDeleted": [], "deletedElsewhere": {}}
+        self.state = {"sync": None, "pendingDeleted": [], "deletedElsewhere": {}, "missing": {}}
 
     # --- the client ---------------------------------------------------------------------
 
@@ -224,7 +228,9 @@ class Device(object):
 
     def _synced(self, versionId, units):
         self.state["sync"] = {"id": versionId, "units": shas(units)}
-        self.state["pendingDeleted"] = [n for n in self.state["pendingDeleted"] if n in units]
+        self.state["pendingDeleted"] = []
+        for name in units:
+            self.state["deletedElsewhere"].pop(name, None)  # the cloud has it again
 
     def load(self, sessionFailed=False):
         """A page load: a new session, then the sync that runs before the
@@ -241,15 +247,44 @@ class Device(object):
 
     def afterSave(self):
         """The upload that trails a committed save, mid-session (no pull)."""
-        if self.sessionFailed or self.paused:
+        if self.sessionFailed:
+            return "skipped"
+        if self.paused:
+            local = unitsOf(self.store)
+            self.state["pendingDeleted"] = [n for n in self.state["pendingDeleted"] if n not in local]
+            self._recordMissing(local)  # paused, but a loss is still recorded now
             return "skipped"
         outcome = self._syncOnce(allowPull=False)
         return outcome
 
+    def _recordMissing(self, local):
+        sync = self.state["sync"]
+        if sync is None:
+            return
+        for name in sync["units"]:
+            if name in local or name in self.state["pendingDeleted"] or name in self.state["deletedElsewhere"]:
+                continue
+            self.state["missing"].setdefault(name, sync["units"][name])
+
     def _syncOnce(self, allowPull):
+        # The store is read before any network, so a loss is recorded even
+        # while the cloud cannot be reached.
+        local = unitsOf(self.store)
+        # A slot the game deleted and then wrote again is not deleted.
+        self.state["pendingDeleted"] = [n for n in self.state["pendingDeleted"] if n not in local]
+        self._recordMissing(local)
         status, info = self._call("status")
         if status != 200 or not info.get("enrolled"):
             return "unknown"  # never "nothing in the cloud"
+        reappeared = []
+        for name in list(self.state["missing"]):
+            if name in self.state["pendingDeleted"]:
+                del self.state["missing"][name]
+            elif name in local:
+                if sha(local[name]) == self.state["missing"][name]:
+                    del self.state["missing"][name]
+                else:
+                    reappeared.append(name)
         head = info.get("head")
         sync = self.state["sync"]
         headUnitShas = dict((u["name"], u["sha256"]) for u in head["units"]) if head else {}
@@ -267,20 +302,29 @@ class Device(object):
                 self._synced(payload["id"], view)
                 return "uploaded"
             return "retry" if code == 409 else "failed"
-        if sync is not None and sync["id"] == head["id"]:
+        if sync is not None and sync["id"] == head["id"] and not reappeared:
             baseUnits = self._fetch(sync["id"]) if self._needsBase() else {}
             if baseUnits is None:
                 return "unknown"
             view = self._view(baseUnits)
-            if shas(view) == sync["units"]:
-                return "in-sync"
-            if not info.get("writable"):
-                return "paused"
-            code, payload = self._put(head["id"], view, "upload", headUnitShas)
-            if code in (200, 201):
+            outcome = "in-sync"
+            if shas(view) != sync["units"]:
+                if not info.get("writable"):
+                    return "paused"
+                code, payload = self._put(head["id"], view, "upload", headUnitShas)
+                if code not in (200, 201):
+                    return "retry" if code == 409 else "failed"
                 self._synced(payload["id"], view)
-                return "uploaded"
-            return "retry" if code == 409 else "failed"
+                outcome = "uploaded"
+            # Units the cloud has that this store lost come back at load:
+            # put-only into absent paths, nothing overwritten.
+            lost = dict((name, files) for name, files in view.items() if name not in local)
+            if allowPull and lost and self.pull:
+                self.backups.append(dict(self.store))
+                for files in lost.values():
+                    self.store.update(files)
+                return "pulled"
+            return outcome
         # The cloud moved on (or this device has never synced): merge.
         if sync is not None:
             base = self._fetch(sync["id"])
@@ -292,8 +336,11 @@ class Device(object):
         if headUnits is None:
             return "unknown"
         view = self._view(base)
+        mergeBase = dict(base)
+        for name in reappeared:
+            mergeBase.pop(name, None)  # as if never seen: the cloud's copy stays, this one goes to a free slot
         try:
-            merged, kept = merge3(base, headUnits, view)
+            merged, kept = merge3(mergeBase, headUnits, view)
         except Unresolvable:
             self.paused = "unresolvable"
             return "paused"

@@ -16,6 +16,13 @@ all of that. After every step:
      was ever kept);
   3. a pull never removed a file from a local store.
 
+At the end, with every device online and loaded twice, the stronger property
+that catches merge bugs history alone would hide: every committed save the
+player did not move on from (saved over it on a device that held it, deleted
+it, loaded a file over it, cleared the browser, or lost it before it ever
+reached the cloud) is in the cloud's head; and no upload was ever refused for
+leaving a save out (422 "removed").
+
 Every seed is deterministic. A failing seed is printed; add it to FIXED_SEEDS
 so it stays a regression test.
 """
@@ -33,7 +40,7 @@ from arcade_social.savesconfig import GameSaves, SavesConfig
 
 SEEDS = int(os.environ.get("SAVES_PROTOCOL_SEEDS", "400"))
 STEPS = int(os.environ.get("SAVES_PROTOCOL_STEPS", "120"))
-FIXED_SEEDS = (1, 2, 3, 7, 42)
+FIXED_SEEDS = (1, 2, 3, 7, 42, 399, 1088)  # 399, 1088: found stale client state (fixed)
 PLAYER = 1
 SLUG = "fishe"
 STORE = "fishe-saves"
@@ -51,6 +58,7 @@ class Api(object):
 
     def __init__(self, saves):
         self.saves = saves
+        self.refusedRemoved = 0
 
     def _wrap(self, function, *arguments):
         try:
@@ -65,6 +73,8 @@ class Api(object):
         try:
             result = self.saves.upload(PLAYER, "alice", SLUG, STORE, ORIGIN, body)
         except savesModule.SavesError as e:
+            if e.code == "removed":
+                self.refusedRemoved += 1
             return e.status, None
         return (201 if result.created else 200), {"id": result.id}
 
@@ -95,6 +105,9 @@ class World(object):
         self.counter = 0
         self.committed = set()  # canonical bytes of every unit content ever committed
         self.released = set()  # destroyed by the player before reaching anywhere else
+        self.superseded = set()  # saved over, or loaded over, on a device that held it
+        self.deleted = set()  # deleted in the game
+        self.neverUploaded = set()  # lost from a store before it ever reached the cloud
         self.history = []
 
     # --- where a unit content lives --------------------------------------------------
@@ -141,6 +154,9 @@ class World(object):
             names = sorted(set(unitName(p) for p in device.store))
             unit = self.random.choice(names) if names and self.random.random() < 0.6 else "slot_%d" % self.random.randint(1, 6)
             content = "%s-%d-%s" % (device.name, self.counter, "x" * self.random.randint(20, 30))
+            old = unitsOf(device.store).get(unit)
+            if not device.sessionFailed and old:
+                self.superseded.add(_normalize(canonical(old)))
             if device.save(unit, content):
                 self.committed.add(_normalize(canonical({ROOT + "/" + unit + "/save.json": content})))
                 self._released(device, before)
@@ -152,6 +168,8 @@ class World(object):
             names = sorted(set(unitName(p) for p in device.store))
             if names:
                 unit = self.random.choice(names)
+                if not device.sessionFailed:
+                    self.deleted.add(_normalize(canonical(unitsOf(device.store)[unit])))
                 if device.delete(unit):
                     self._released(device, before)
                     self._log(device, "delete %s -> %s" % (unit, device.afterSave()))
@@ -171,9 +189,27 @@ class World(object):
                 chosen = self.random.choice(versions)
                 status, saveFile = self.api.version(chosen["id"])
                 if status == 200:
+                    current = unitsOf(device.store)
+                    for name in unitsOf(saveFile["files"]):
+                        if name in current:
+                            self.superseded.add(_normalize(canonical(current[name])))
                     device.importFile(saveFile["files"])
                     self._log(device, "import version %d" % chosen["id"])
                     self._noFileRemoved(device, before)
+        elif roll < 0.885:
+            # A unit vanishes without the game deleting it (the Night Ferry
+            # empty-slot report): never a reason to drop it from the cloud.
+            names = sorted(set(unitName(p) for p in device.store))
+            if names:
+                unit = self.random.choice(names)
+                content = _normalize(canonical(unitsOf(device.store)[unit]))
+                for path in [p for p in device.store if unitName(p) == unit]:
+                    del device.store[path]
+                if content not in self.everywhere():
+                    self.released.add(content)
+                if content not in self.serverContents():
+                    self.neverUploaded.add(content)
+                self._log(device, "lost track of %s -> %s" % (unit, device.afterSave()))
         elif roll < 0.90:
             # Clearing site data destroys what was only here: no design can keep it.
             elsewhere = self.everywhere(exclude=device)
@@ -194,6 +230,10 @@ class World(object):
             if status == 200 and info.get("head"):
                 status, saveFile = self.api.version(info["head"]["id"])
                 if status == 200:
+                    current = unitsOf(device.store)
+                    for name in unitsOf(saveFile["files"]):
+                        if name in current:
+                            self.superseded.add(_normalize(canonical(current[name])))
                     device.importFile(saveFile["files"])
                     self._log(device, "load this version %d" % info["head"]["id"])
         else:
@@ -237,10 +277,28 @@ def run(seed, path, steps=STEPS):
     world.saves.policy.mode = "on"
     for device in world.devices:
         device.online = True
-    for _ in range(2):
+    # Load every device until a whole round stores no new version (a fixed
+    # point), at most six rounds: a Stage 1 device's merge can need one more
+    # round to reach the others.
+    for round in range(6):
+        before = world.saves.store.counts()["version"]
         for device in world.devices:
             device.load()
             world.check()
+        if round > 0 and world.saves.store.counts()["version"] == before:
+            break
+    head = world.saves.store.head(PLAYER, SLUG, STORE)
+    inHead = set()
+    if head is not None:
+        _, contents = world.saves.store.version(PLAYER, SLUG, STORE, head["id"])
+        inHead = set(_normalize(data) for data in contents.values())
+    exempt = world.released | world.superseded | world.deleted | world.neverUploaded
+    missing = [c for c in world.committed if c not in exempt and c not in inHead]
+    assert not missing, "saves the player never moved on from are not in the cloud's head: %r\n%s" % (
+        missing[:3],
+        "\n".join(world.history[-30:]),
+    )
+    assert world.api.refusedRemoved == 0, "the client had uploads refused for leaving a save out"
     return world
 
 
