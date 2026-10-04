@@ -8,6 +8,8 @@ One host, api.play.danielstephenson.dev, answers two kinds of request:
   API    /v1/...  - JSON, called with credentialed CORS by the portal and by
          game pages (RFC 0013 §1-§2, RFC 0014 §3, RFC 0015 §2)
 
+plus /healthz and /version.json ({"version": "<arcade_social.__version__>"}).
+
 Sign-in proxies to UserAuth and keeps its tokens in two host-only cookies,
 `__Host-play_at` (access JWT) and `__Host-play_rt` (refresh token), both
 Secure, HttpOnly, SameSite=Lax, Path=/, no Domain. No page script can read
@@ -258,6 +260,11 @@ def makeHandler(social):
                 path = unquote(urlparse(self.path).path)
                 if path == "/healthz" and self.command in ("GET", "HEAD"):
                     self._send(200, b"ok\n", "text/plain; charset=utf-8")
+                elif path == "/version.json" and self.command in ("GET", "HEAD"):
+                    # The version of the code this process runs, so a deploy can
+                    # be verified by the version it reports. No sign-in needed.
+                    body = json.dumps({"version": __version__}).encode("utf-8")
+                    self._send(200, body, "application/json", (("Cache-Control", "no-store"),))
                 elif path.startswith("/v1/") or path == "/v1":
                     self._api(path)
                 else:
