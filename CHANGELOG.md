@@ -7,6 +7,9 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Added
 
+- `GET /version.json`: `{"version": "<arcade_social.__version__>"}` with `Content-Type: application/json`
+  and `Cache-Control: no-store`, no sign-in and no cookies, so a deploy can be verified by the version
+  it reports.
 - `clients/js/arcade-scores.js`: a vendorable, dependency-free browser client (under 3 KB) for static games:
   `submit`/`submitScore`, `unlock`, `whoami`, `top` and `signIn`. Sends only from a
   `https://<slug>.play.danielstephenson.dev` page for a signed-in player, never throws, retries a failed

@@ -3,6 +3,7 @@
 (RFC 0013 §1): cookies, the form CSRF token, return URLs, refresh, sign-out,
 registration and the rate limits in front of UserAuth's shared bucket."""
 
+import arcade_social
 import json
 from urllib.parse import urlencode
 
@@ -349,3 +350,18 @@ def test_root_and_unknown_pages(env):
     assert client.request("GET", "/").header("Location") == "/account"
     assert client.request("GET", "/nope").status == 404
     assert client.request("GET", "/healthz").text == "ok\n"
+
+
+def test_version_json_reports_the_running_version(env):
+    client = env.client()
+    for method in ("GET", "HEAD"):
+        response = client.request(method, "/version.json", cookies=False)
+        assert response.status == 200
+        assert response.header("Content-Type") == "application/json"
+        assert response.header("Cache-Control") == "no-store"
+        assert response.header("Set-Cookie") is None
+        if method == "GET":
+            assert response.json() == {"version": arcade_social.__version__}
+        else:
+            assert response.body == b""
+    assert client.request("POST", "/version.json").status != 200

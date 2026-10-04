@@ -231,6 +231,7 @@ gateway's `secure-headers` (`strict-origin-when-cross-origin`) is fine.
 | `POST /account/delete` | Delete everything (type `delete` to confirm); also signs out |
 | `POST /signout` | Sign out (revokes the session at UserAuth) |
 | `GET /healthz` | `ok` |
+| `GET /version.json` | `{"version": "<arcade_social.__version__>"}`, `application/json`, `Cache-Control: no-store`, no sign-in: lets a deploy be verified by the version it reports |
 
 Every page is sent with `Content-Security-Policy: default-src 'none'; style-src 'unsafe-inline'; img-src
 'self'; form-action 'self' <portal> https://*.play.<domain> <aliases>; frame-ancestors 'none'; base-uri
