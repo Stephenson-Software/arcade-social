@@ -42,7 +42,7 @@ node --test clients/js/arcade-scores.test.js
 
 Use a Python that has pytest installed. CI does `pip install pytest` and runs `python -m pytest -v`. `pytest.ini` sets `testpaths = tests` and `pythonpath = src tests`. Tests live in `tests/test_*.py`. Shared fixtures are in `tests/conftest.py` (`env`) and `tests/helpers.py`. `tests/fakeuserauth.py` is a stdlib fake of the UserAuth behaviour the service depends on (single-use refresh tokens, revocation, 429 + `Retry-After`). `tests/savesclient.py` is the reference cloud-saves client.
 
-CI (`.github/workflows/test.yml`, workflow **Test**) has three jobs: `test` (matrix 3.8 / 3.12: pytest plus the `check-config` step), `js-client`, and `docker` (build, non-root health check, origin checks, WAL migrate and online backup). `tests/test_store.py::test_concurrent_first_start_migrates_once` has failed once on 3.8 with `database is locked` (main, 2026-10-05) and passed on re-run. Treat a single failure there as a known flake. Investigate it if it repeats.
+CI (`.github/workflows/test.yml`, workflow **Test**) has three jobs: `test` (matrix 3.8 / 3.12: pytest plus the `check-config` step), `js-client`, and `docker` (build, non-root health check, origin checks, WAL migrate and online backup). `tests/test_store.py::test_concurrent_first_start_migrates_once` is flaky on CI's Python 3.8 job: it failed with `database is locked` on main on 2026-10-05 and on PR #7 on 2026-10-21, and passed on re-run both times. It passed locally on 3.8 and 3.11. If it fails alone, re-run the job once. If it fails on re-run, treat it as real.
 
 ## Repository layout
 
