@@ -374,7 +374,7 @@ games:
 
 A game that leaves the file, or is `mode: readonly`, keeps what it has: versions stay listed and
 downloadable and can be deleted. **The account page** `/account/saves` lists the newest 20 versions of each
-game (and says how many there are), each with a download (a file the game's "Load saves from a file"
+game (saying how many there are in all when there are more), each with a download (a file the game's "Load saves from a file"
 accepts), and a typed delete per game; it has no script.
 
 **The client side** (merging per unit, keep-both, carry-forward of units a session lost track of, pulls as
