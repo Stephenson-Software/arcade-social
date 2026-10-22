@@ -1,5 +1,5 @@
 # @author Daniel McCoy Stephenson
-"""Configuration, read from ARCADE_SOCIAL_* environment variables, and the two
+"""Configuration, read from ARCADE_SOCIAL_* environment variables, and the three
 reviewed files the service reads from the gateway repository:
 
   games.yaml   arcade's registry (which games exist, their slugs and aliases);
@@ -8,7 +8,7 @@ reviewed files the service reads from the gateway repository:
   saves.yaml   which games keep cloud saves, and their limits (RFC 0016 §2);
                optional: a missing file means no game has cloud saves
 
-Both are reloaded when they change on disk. A file that no longer parses is
+All three are reloaded when they change on disk. A file that no longer parses is
 logged and the last good copy stays in force, as arcade does with games.yaml.
 """
 

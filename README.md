@@ -222,12 +222,16 @@ gateway's `secure-headers` (`strict-origin-when-cross-origin`) is fine.
 
 | Path | Purpose |
 |---|---|
+| `GET /` | Redirects to `/account` |
 | `GET/POST /signin?return=` | Sign in |
 | `GET/POST /register?return=` | Create a UserAuth account, then sign in |
 | `GET/POST /welcome?return=` | Choose a display name (first sign-in) |
 | `GET /account` | Username (private), display name, what is held, sign out, delete |
 | `GET/POST /account/name` | Change the display name |
 | `GET /account/export` | Download everything held about the account as JSON |
+| `GET /account/saves` | Cloud saves: the newest 20 versions of each game, with downloads and a delete per game |
+| `GET /account/saves/download?slug=&store=&id=` | Download one cloud version as a save file |
+| `POST /account/saves/delete` | Delete one game's cloud saves (type `delete` to confirm) |
 | `POST /account/delete` | Delete everything (type `delete` to confirm); also signs out |
 | `POST /signout` | Sign out (revokes the session at UserAuth) |
 | `GET /healthz` | `ok` |
@@ -251,10 +255,11 @@ stops parsing at runtime is logged while the last good one stays in force.
 Board and achievement ids are permanent. Removing a declaration hides its board (the API answers 404);
 its records stay in the database.
 
-Check both files before a gateway PR:
+Check the files before a gateway PR (`--saves` is optional; without it saves.yaml is checked only if it
+exists at `ARCADE_SOCIAL_SAVES_CONFIG`):
 
 ```sh
-PYTHONPATH=src python -m arcade_social check-config --registry games.yaml --boards boards.yaml
+PYTHONPATH=src python -m arcade_social check-config --registry games.yaml --boards boards.yaml --saves saves.yaml
 ```
 
 ## Display names
@@ -328,7 +333,7 @@ writes need `Content-Type: application/json` and `X-Play-Client: 1` like every w
 | `GET` | `/v1/saves/<store>` | `{enrolled, allowed, writable, reason, pull, quota, head?}`. `head` is present only when enrolled; `head: null` (with 200) means "enrolled, nothing uploaded yet". **Any other answer is "unknown", never "empty".** |
 | `POST` / `DELETE` | `/v1/saves/<store>/enroll` | Turn backing up on / off. Turning it off keeps every version. |
 | `PUT` | `/v1/saves/<store>` | Upload `{parent, device, deviceLabel, kind, file, confirmRemoved?, confirmShrink?}` |
-| `GET` | `/v1/saves/<store>/versions` | Newest first, with units, sizes, device labels |
+| `GET` | `/v1/saves/<store>/versions` | The newest 200, newest first, with units, sizes, device labels |
 | `GET` | `/v1/saves/<store>/versions/<id>` | That version as a save file (`?download=1` for an attachment) |
 | `POST` | `/v1/saves/<store>/versions/<id>/pin` | Mark a version to keep |
 | `DELETE` | `/v1/saves/<store>` | `{"confirm": "delete"}`: every version of this game for this player |
@@ -368,8 +373,9 @@ games:
 ```
 
 A game that leaves the file, or is `mode: readonly`, keeps what it has: versions stay listed and
-downloadable and can be deleted. **The account page** `/account/saves` lists every version with a download
-(a file the game's "Load saves from a file" accepts) and a typed delete per game; it has no script.
+downloadable and can be deleted. **The account page** `/account/saves` lists the newest 20 versions of each
+game (and says how many there are), each with a download (a file the game's "Load saves from a file"
+accepts), and a typed delete per game; it has no script.
 
 **The client side** (merging per unit, keep-both, carry-forward of units a session lost track of, pulls as
 imports with a local backup first) is in the games' runtime (tak `/tak/cloud.js`). `tests/savesclient.py`
@@ -550,7 +556,8 @@ throw, never block the game, and retry a failed report once.
 ```sh
 python -m pytest -q                       # Python 3.8+; stdlib only, pytest for the tests
 node --test clients/js/arcade-scores.test.js   # the vendored JS client (Node 20+)
-PYTHONPATH=src python -m arcade_social check-config --registry examples/games.yaml --boards examples/boards.yaml
+PYTHONPATH=src python -m arcade_social check-config --registry examples/games.yaml --boards examples/boards.yaml \
+  --saves examples/saves.yaml
 ```
 
 The tests run the real server against a fake UserAuth (`tests/fakeuserauth.py`, stdlib `http.server`)
