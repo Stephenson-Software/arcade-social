@@ -1,6 +1,8 @@
 # @author Daniel McCoy Stephenson
 """saves.yaml: the strict parser, and the switches read from the environment."""
 
+import hashlib
+import json
 import os
 
 import pytest
@@ -9,6 +11,7 @@ from arcade_social import __main__ as cli
 from arcade_social import savesconfig
 from arcade_social.config import Config, ConfigError
 from arcade_social.saves_store import SavesStore
+from arcade_social.store import Store
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 EXAMPLES = os.path.join(HERE, "..", "examples")
@@ -115,3 +118,51 @@ def test_check_config_and_backup_saves(tmp_path, monkeypatch, capsys):
     assert cli.main(["admin", "saves-check"]) == 0
     assert cli.main(["migrate"]) == 0
     assert "saves schema version 1" in capsys.readouterr().out
+
+
+def _commit(store, playerId, slug, storeName, parent, units):
+    encoded = dict((name, (hashlib.sha256(data).hexdigest(), data)) for name, data in units.items())
+    meta = {
+        "device": "d1",
+        "deviceLabel": "Laptop",
+        "origin": "https://fishe.play.example",
+        "kind": "auto",
+        "format": "tak-saves",
+    }
+    return store.commit(playerId, slug, storeName, parent, encoded, meta, lambda *args: None)[0]
+
+
+def test_admin_saves_usage_and_versions(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("ARCADE_SOCIAL_DB", str(tmp_path / "db.sqlite3"))
+    monkeypatch.setenv("ARCADE_SOCIAL_SAVES_DB", str(tmp_path / "saves.sqlite3"))
+    alice = Store(str(tmp_path / "db.sqlite3")).ensurePlayer("alice")["id"]
+    saves = SavesStore(str(tmp_path / "saves.sqlite3"))
+    saves.enroll(alice, "fishe", "fishe-saves")
+    first = _commit(saves, alice, "fishe", "fishe-saves", None, {"slot_1": b"aaaa"})
+    second = _commit(saves, alice, "fishe", "fishe-saves", first, {"slot_1": b"aaaa", "slot_2": b"bbbbbb"})
+    saves.enroll(alice, "tak", "tak-saves")  # enrolled, nothing uploaded
+
+    # The username is looked up case-insensitively in the main database.
+    assert cli.main(["admin", "saves-usage", "Alice"]) == 0
+    usage = json.loads(capsys.readouterr().out)
+    fields = ("slug", "store", "enrolled", "versions", "head", "storedBytes")
+    assert [tuple(game[field] for field in fields) for game in usage] == [
+        ("fishe", "fishe-saves", True, 2, second, 10),
+        ("tak", "tak-saves", True, 0, None, 0),
+    ]
+
+    assert cli.main(["admin", "saves-versions", "alice", "fishe", "fishe-saves"]) == 0
+    versions = json.loads(capsys.readouterr().out)
+    assert [(v["id"], v["parent"], v["unitCount"], v["totalSize"]) for v in versions] == [
+        (second, first, 2, 10),
+        (first, None, 1, 4),
+    ]
+    assert [unit["name"] for unit in versions[0]["units"]] == ["slot_1", "slot_2"]
+    assert cli.main(["admin", "saves-versions", "alice", "fishe", "other-store"]) == 0
+    assert json.loads(capsys.readouterr().out) == []
+
+    # A username with no player row is refused, for both actions, without touching the saves file.
+    assert cli.main(["admin", "saves-usage", "nobody"]) == 1
+    assert capsys.readouterr().out.strip() == "no such player"
+    assert cli.main(["admin", "saves-versions", "nobody", "fishe", "fishe-saves"]) == 1
+    assert capsys.readouterr().out.strip() == "no such player"
