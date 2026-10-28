@@ -15,6 +15,13 @@ All notable changes to this project are documented in this file. The format is b
   `https://<slug>.play.danielstephenson.dev` page for a signed-in player, never throws, retries a failed
   report once. Tested under `node --test` in CI (new `js-client` job).
 
+### Fixed
+
+- Starting the service (or `migrate`) while another process opens the same fresh database or saves
+  database no longer fails with `database is locked`. SQLite rejects the switch to WAL mode at once,
+  without waiting on the 30 s busy timeout, while another connection holds a write lock, so the switch is
+  now retried for up to 30 s.
+
 ## [0.1.0] - 2026-10-03
 
 ### Added

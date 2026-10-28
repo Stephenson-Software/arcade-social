@@ -25,7 +25,7 @@ import json
 import sqlite3
 from contextlib import contextmanager
 
-from arcade_social.store import migrate, nowMillis
+from arcade_social.store import enableWal, migrate, nowMillis
 
 MIGRATIONS = (
     (
@@ -98,9 +98,7 @@ class SavesStore(object):
         self.clock = clock
         connection = self._connect()
         try:
-            mode = connection.execute("PRAGMA journal_mode=WAL").fetchone()[0]
-            if path != ":memory:" and str(mode).lower() != "wal":
-                raise RuntimeError("SQLite refused WAL mode for %s (got %s)" % (path, mode))
+            enableWal(connection, path)
             self.migrated = migrate(connection, migrations, clock)
         finally:
             connection.close()
