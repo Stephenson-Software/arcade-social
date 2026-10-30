@@ -8,7 +8,8 @@ import threading
 import pytest
 
 from arcade_social import boards
-from arcade_social.store import MIGRATIONS, NameHeld, NameTaken, NameTooSoon, SchemaTooNew, Store
+from arcade_social.saves_store import SavesStore
+from arcade_social.store import MIGRATIONS, NameHeld, NameTaken, NameTooSoon, SchemaTooNew, Store, enableWal
 
 DAY = 86400000
 BOARD = boards.Board("most-money", "Most", "desc", 0, 1000, integer=True, maxPerHour=1000)
@@ -117,6 +118,49 @@ def test_concurrent_first_start_migrates_once(tmp_path):
     connection = sqlite3.connect(path)
     assert [row[0] for row in connection.execute("SELECT version FROM schema_version")] == [1, 2, 3]
     connection.close()
+
+
+def _holdWriteLock(path, seconds):
+    """Hold a write lock on a fresh, rollback-journal file for `seconds`. While
+    it is held, PRAGMA journal_mode=WAL fails at once with "database is locked"
+    instead of waiting on busy_timeout: the race behind #13."""
+    holder = sqlite3.connect(path, isolation_level=None, check_same_thread=False)
+    holder.execute("CREATE TABLE placeholder (x INTEGER)")
+    holder.execute("BEGIN IMMEDIATE")
+
+    def release():
+        holder.execute("COMMIT")
+        holder.close()
+
+    timer = threading.Timer(seconds, release)
+    timer.start()
+    return timer
+
+
+@pytest.mark.parametrize("storeClass", [Store, SavesStore])
+def test_first_start_waits_out_a_lock_on_the_wal_switch(tmp_path, storeClass):
+    path = str(tmp_path / "db.sqlite3")
+    timer = _holdWriteLock(path, 0.3)
+    try:
+        storeClass(path)
+    finally:
+        timer.join()
+    connection = sqlite3.connect(path)
+    assert connection.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
+    assert [row[0] for row in connection.execute("SELECT version FROM schema_version")][0] == 1
+    connection.close()
+
+
+def test_the_wal_switch_gives_up_after_its_timeout(tmp_path):
+    path = str(tmp_path / "db.sqlite3")
+    timer = _holdWriteLock(path, 1.0)
+    connection = sqlite3.connect(path, isolation_level=None)
+    try:
+        with pytest.raises(sqlite3.OperationalError, match="locked"):
+            enableWal(connection, path, timeout=0.1)
+    finally:
+        connection.close()
+        timer.join()
 
 
 # --- display names ----------------------------------------------------------------------

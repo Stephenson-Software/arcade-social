@@ -135,6 +135,24 @@ def nowMillis():
     return int(time.time() * 1000)
 
 
+def enableWal(connection, path, timeout=30.0):
+    """Switch the database to WAL mode. Switching a brand-new file can fail
+    with "database is locked" straight away, without waiting on busy_timeout,
+    when other processes are opening it at the same moment (#13), so the
+    switch is retried until `timeout` seconds have passed."""
+    deadline = time.monotonic() + timeout
+    while True:
+        try:
+            mode = connection.execute("PRAGMA journal_mode=WAL").fetchone()[0]
+            break
+        except sqlite3.OperationalError as e:
+            if "locked" not in str(e) or time.monotonic() >= deadline:
+                raise
+            time.sleep(0.01)
+    if path != ":memory:" and str(mode).lower() != "wal":
+        raise RuntimeError("SQLite refused WAL mode for %s (got %s)" % (path, mode))
+
+
 def migrate(connection, migrations=MIGRATIONS, clock=nowMillis):
     """Apply every migration newer than the database, in one transaction.
     Returns (before, after)."""
@@ -175,9 +193,7 @@ class Store(object):
         self.clock = clock
         connection = self._connect()
         try:
-            mode = connection.execute("PRAGMA journal_mode=WAL").fetchone()[0]
-            if path != ":memory:" and str(mode).lower() != "wal":
-                raise RuntimeError("SQLite refused WAL mode for %s (got %s)" % (path, mode))
+            enableWal(connection, path)
             self.migrated = migrate(connection, migrations, clock)
         finally:
             connection.close()
