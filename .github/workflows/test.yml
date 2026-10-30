@@ -11,10 +11,18 @@ permissions:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    # Named by interpreter alone, so the check names stay test (3.8) / test (3.12).
+    name: test (${{ matrix.python-version }})
+    runs-on: ${{ matrix.os }}
     strategy:
       matrix:
-        python-version: ['3.8', '3.12']
+        python-version: ['3.12']
+        os: [ubuntu-latest]
+        include:
+          # setup-python publishes no 3.8 build for the Ubuntu 26.04 image
+          # ubuntu-latest now resolves to, so the 3.8 floor is pinned.
+          - python-version: '3.8'
+            os: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
