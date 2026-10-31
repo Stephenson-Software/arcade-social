@@ -82,6 +82,11 @@ class Presence(object):
             entry.seen = now
             return entry.id
 
+    def clear(self):
+        """Forget everyone now (the kill switch)."""
+        with self._lock:
+            self._entries.clear()
+
     def remove(self, playerId):
         """Forget a player now (opt-out, sign-out, deletion, exclusion)."""
         with self._lock:

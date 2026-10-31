@@ -7,6 +7,10 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Added
 
+- `ARCADE_SOCIAL_HALL_PRESENCE=off|on` (default `on`): a kill switch for live hall presence (RFC 0030),
+  like `ARCADE_SOCIAL_SAVES`. Off, listings answer `{people: [], ttl, disabled: true}`, poses and opt-ins
+  answer 503 `{error, disabled: true}`, and the in-memory table is emptied; leaving and opting out still
+  work, and the stored opt-in flag is kept for when it is turned back on.
 - `GET /version.json`: `{"version": "<arcade_social.__version__>"}` with `Content-Type: application/json`
   and `Cache-Control: no-store`, no sign-in and no cookies, so a deploy can be verified by the version
   it reports.

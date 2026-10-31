@@ -29,6 +29,13 @@ def test_environment_defaults_and_overrides():
     assert config.serviceOrigin == "https://api.example.test"
 
 
+def test_hall_presence_kill_switch_defaults_on():
+    assert Config.fromEnvironment({}).hallPresence == "on"
+    assert Config.fromEnvironment({"ARCADE_SOCIAL_HALL_PRESENCE": " OFF "}).hallPresence == "off"
+    with pytest.raises(ConfigError):
+        Config.fromEnvironment({"ARCADE_SOCIAL_HALL_PRESENCE": "maybe"})
+
+
 def test_hall_origins_are_configurable_and_normalised():
     config = Config.fromEnvironment({"ARCADE_SOCIAL_HALL_ORIGINS": " https://Hall.example.test/ ,https://hall.example.test"})
     assert config.hallOrigins == ("https://hall.example.test",)

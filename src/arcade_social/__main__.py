@@ -53,6 +53,7 @@ def serve(arguments):
             "everyone" if config.savesAccounts is None else "%d listed" % len(config.savesAccounts),
         )
     )
+    log("hall presence %s" % config.hallPresence)
     log(
         "arcade-social %s on %s:%d for %s (database %s, schema %d%s; registry %s; boards %s; userauth %s; "
         "%d operator(s))"

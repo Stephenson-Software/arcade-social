@@ -394,3 +394,54 @@ def test_concurrent_posts_and_listings_through_the_server(env):
         thread.join()
     assert errors == []
     assert len(_people(env.client())) == 6
+
+
+# --- the kill switch (ARCADE_SOCIAL_HALL_PRESENCE=off) ------------------------------------------
+
+
+def test_the_kill_switch_empties_the_hall_and_refuses_poses_but_keeps_the_opt_in(env):
+    alice = _optedIn(env, "alice", "Alice")
+    bob = env.player("bob", "Bob")
+    assert alice.api("POST", "/v1/presence", origin=HALL, payload=_pose()).status == 200
+    assert len(env.social.presence) == 1
+    env.config.hallPresence = "off"
+    listing = env.client().api("GET", "/v1/presence?layout=" + LAYOUT, origin=HALL)
+    assert listing.status == 200
+    assert listing.json() == {"people": [], "ttl": presenceModule.TTL_SECONDS, "disabled": True}
+    assert len(env.social.presence) == 0  # the in-memory table is cleared
+    # a bad layout is still a bad request
+    assert env.client().api("GET", "/v1/presence?layout=", origin=HALL).status == 400
+    refused = alice.api("POST", "/v1/presence", origin=HALL, payload=_pose())
+    assert refused.status == 503 and refused.json()["disabled"] is True and refused.json()["error"]
+    assert refused.header("Retry-After") == "300"
+    optIn = bob.api("POST", "/v1/presence/optin", origin=HALL)
+    assert optIn.status == 503 and optIn.json()["disabled"] is True
+    assert env.social.store.player("bob")["hall_presence"] == 0
+    # the opt-in flag on the player row is kept, and reported with the switch
+    assert alice.api("GET", "/v1/presence/me", origin=HALL).json() == {"optedIn": True, "disabled": True}
+    assert env.social.store.player("alice")["hall_presence"] == 1
+    # leaving and opting out still work while it is off
+    assert alice.api("DELETE", "/v1/presence", origin=HALL).json() == {"ok": True}
+    assert len(env.social.presence) == 0
+    # back on: the kept opt-in works again without asking the player twice
+    env.config.hallPresence = "on"
+    assert alice.api("GET", "/v1/presence/me", origin=HALL).json() == {"optedIn": True}
+    assert alice.api("POST", "/v1/presence", origin=HALL, payload=_pose()).status == 200
+    assert [person["name"] for person in _people(env.client())] == ["Alice"]
+    env.config.hallPresence = "off"
+    assert alice.api("DELETE", "/v1/presence/optin", origin=HALL).json() == {"optedIn": False}
+    assert env.social.store.player("alice")["hall_presence"] == 0
+
+
+def test_the_kill_switch_on_the_account_page(env):
+    alice = env.player("alice", "Alice")
+    env.config.hallPresence = "off"
+    page = alice.request("GET", "/account")
+    assert "switched off for now" in page.text
+    on = alice.form("/account/presence", {"show": "on"}, csrfPage="/account")
+    assert on.status == 503 and "switched off" in on.text
+    assert env.social.store.player("alice")["hall_presence"] == 0
+    off = alice.form("/account/presence", {"show": "off"}, csrfPage="/account")
+    assert off.status == 200 and "no longer appear" in off.text
+    env.config.hallPresence = "on"
+    assert "switched off for now" not in alice.request("GET", "/account").text
