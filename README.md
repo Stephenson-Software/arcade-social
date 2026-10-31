@@ -613,8 +613,8 @@ The tests run the real server against a fake UserAuth (`tests/fakeuserauth.py`, 
 that reproduces the UserAuth behaviour the service depends on (single-use refresh tokens, revocation,
 429 + `Retry-After`, validation messages).
 
-`src/arcade_social/registry.py` is vendored byte-for-byte from arcade (`src/arcade/registry.py` at
-`c34f931bca31482eb09bcee959e949922680b9e6`). When arcade's registry format changes, copy the file again and
+`src/arcade_social/registry.py` is vendored byte-for-byte from arcade (`src/arcade/registry.py` as of
+Stephenson-Software/arcade#65, which adds `tags:` and `engine:` and keeps the file free of imports from arcade). When arcade's registry format changes, copy the file again and
 update the hash in `tests/test_main.py`; until then this service would refuse a `games.yaml` arcade accepts
 (it keeps the last good registry while running, but would not start).
 
