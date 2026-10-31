@@ -97,6 +97,10 @@ ROUTES = (
     ("DELETE", r"^/v1/admin/exclude/(?P<username>[^/]+)$", "adminUnexclude", ADMIN_WRITE),
     ("DELETE", r"^/v1/admin/likes/(?P<username>[^/]+)$", "adminDeleteLikes", ADMIN_WRITE),
 )
+# The signed-in routes the walkable hall may use: who is signed in, likes, and
+# reading the player's own bests. Everything else signed-in - scores,
+# achievements, cloud saves, deleting data - stays with the games and the portal.
+HALL_ROUTES = frozenset(("apiSession", "apiSignOut", "apiMyLikes", "apiLike", "apiUnlike", "apiMe", "apiAround"))
 _COMPILED = tuple((method, re.compile(pattern), name, access) for method, pattern, name, access in ROUTES)
 
 log = configModule.log
@@ -153,7 +157,9 @@ class Social(object):
 
     def caller(self, origin):
         config = self.config
-        return origins.classify(origin, self.registry, config.gameDomain, config.portalOrigin, config.serviceOrigin)
+        return origins.classify(
+            origin, self.registry, config.gameDomain, config.portalOrigin, config.serviceOrigin, config.hallOrigins
+        )
 
     def safeReturn(self, raw):
         """The URL to send a player back to after signing in: an https URL on
@@ -177,7 +183,8 @@ class Social(object):
         return urlunparse(("https", host, parsed.path or "/", "", parsed.query, parsed.fragment))
 
     def formTargets(self):
-        return origins.returnOrigins(self.registry, self.config.gameDomain, self.config.portalOrigin)
+        config = self.config
+        return origins.returnOrigins(self.registry, config.gameDomain, config.portalOrigin, config.hallOrigins)
 
     def isOperator(self, username):
         return username is not None and username in self.config.operators
@@ -469,7 +476,7 @@ def makeHandler(social):
 
         def _api(self, path):
             caller = social.caller(self.headers.get("Origin"))
-            credentialed = caller is not None and caller.kind in (origins.GAME, origins.PORTAL)
+            credentialed = caller is not None and caller.kind in (origins.GAME, origins.PORTAL, origins.HALL)
             if self.command == "OPTIONS":
                 self._preflight(path, caller, credentialed)
                 return
@@ -489,6 +496,8 @@ def makeHandler(social):
                     self._cors.append(("Access-Control-Allow-Origin", "*"))
             if access in (PRIVATE, WRITE) and not credentialed:
                 raise ApiError(403, "this origin may not use the signed-in API")
+            if access in (PRIVATE, WRITE) and caller.kind == origins.HALL and name not in HALL_ROUTES:
+                raise ApiError(403, "the arcade hall may not use this endpoint")
             if access in (WRITE, ADMIN_WRITE):
                 self._limit(ratelimit.API_WRITES_PER_IP, self._clientIp())
                 self._writeGuard(caller, admin=access == ADMIN_WRITE)
@@ -506,7 +515,9 @@ def makeHandler(social):
             if not allowedMethods:
                 raise ApiError(404, "not found")
             requested = (self.headers.get("Access-Control-Request-Method") or "").upper()
-            if not credentialed or requested not in allowedMethods or path.startswith("/v1/admin/"):
+            if not credentialed or requested not in allowedMethods or path.startswith("/v1/admin/") or (
+                caller.kind == origins.HALL and not self._hallMay(path, requested)
+            ):
                 # No CORS headers: the browser blocks the request.
                 self._drain()
                 self._send(403, b"", "text/plain; charset=utf-8", (("Vary", "Origin"),))
@@ -525,6 +536,12 @@ def makeHandler(social):
                     ("Vary", "Origin"),
                 ),
             )
+
+        def _hallMay(self, path, method):
+            for routeMethod, pattern, name, access in _COMPILED:
+                if routeMethod == method and pattern.match(path):
+                    return access == PUBLIC or name in HALL_ROUTES
+            return False
 
         def _writeGuard(self, caller, admin):
             """CSRF for cookie-authenticated writes (RFC 0013 §1): an allowed

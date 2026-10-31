@@ -16,6 +16,7 @@ def test_environment_defaults_and_overrides():
     assert config.databasePath == "/data/arcade-social.sqlite3"
     assert config.userauthUrl == "http://userauth:9998"
     assert config.operators == frozenset() and config.trustForwardedFor is False
+    assert config.hallOrigins == ("https://play.danielstephenson.dev", "https://arcade.danielstephenson.dev")
     config = Config.fromEnvironment({
         "ARCADE_SOCIAL_OPERATORS": "Boss, other ,",
         "ARCADE_SOCIAL_TRUST_FORWARDED_FOR": "true",
@@ -28,11 +29,26 @@ def test_environment_defaults_and_overrides():
     assert config.serviceOrigin == "https://api.example.test"
 
 
+def test_hall_origins_are_configurable_and_normalised():
+    config = Config.fromEnvironment({"ARCADE_SOCIAL_HALL_ORIGINS": " https://Hall.example.test/ ,https://hall.example.test"})
+    assert config.hallOrigins == ("https://hall.example.test",)
+    assert Config.fromEnvironment({"ARCADE_SOCIAL_HALL_ORIGINS": ""}).hallOrigins == ()
+
+
 @pytest.mark.parametrize("environ", [
     {"ARCADE_SOCIAL_PUBLIC_URL": "api.example.test"},
     {"ARCADE_SOCIAL_PUBLIC_URL": "https://api.example.test/path"},
     {"ARCADE_SOCIAL_PORTAL_ORIGIN": "http://example.test"},
     {"ARCADE_SOCIAL_REFRESH_DAYS": "thirty"},
+    {"ARCADE_SOCIAL_HALL_ORIGINS": "http://play.danielstephenson.dev"},
+    {"ARCADE_SOCIAL_HALL_ORIGINS": "https://play.danielstephenson.dev/hall/"},
+    {"ARCADE_SOCIAL_HALL_ORIGINS": "https://play.danielstephenson.dev:8443"},
+    {"ARCADE_SOCIAL_HALL_ORIGINS": "https://play.danielstephenson.dev:x"},
+    {"ARCADE_SOCIAL_HALL_ORIGINS": "https://user@play.danielstephenson.dev"},
+    # a game's slug host, the portal or the service cannot also be the hall
+    {"ARCADE_SOCIAL_HALL_ORIGINS": "https://fishe.play.danielstephenson.dev"},
+    {"ARCADE_SOCIAL_HALL_ORIGINS": "https://danielstephenson.dev"},
+    {"ARCADE_SOCIAL_HALL_ORIGINS": "https://api.play.danielstephenson.dev"},
 ])
 def test_bad_values_are_refused(environ):
     with pytest.raises(ConfigError):

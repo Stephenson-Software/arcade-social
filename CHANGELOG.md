@@ -14,6 +14,10 @@ All notable changes to this project are documented in this file. The format is b
   `submit`/`submitScore`, `unlock`, `whoami`, `top` and `signIn`. Sends only from a
   `https://<slug>.play.danielstephenson.dev` page for a signed-in player, never throws, retries a failed
   report once. Tested under `node --test` in CI (new `js-client` job).
+- The walkable arcade hall as a caller (`ARCADE_SOCIAL_HALL_ORIGINS`, default
+  `https://play.danielstephenson.dev,https://arcade.danielstephenson.dev`): it may read the session, the
+  player's likes and own bests, and like or unlike any registry game, but never submit scores or
+  achievements, use cloud saves or delete data. Hall URLs are valid sign-in `return` targets.
 
 ### Fixed
 
