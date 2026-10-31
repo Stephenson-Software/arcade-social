@@ -21,6 +21,9 @@ FISHE = "https://fishe.play.example.test"
 FROG = "https://frog-hopper.play.example.test"
 TIDEWATER = "https://tidewater.play.example.test"
 TIDEWATER_ALIAS = "https://tidewater.example.test"
+# The walkable arcade hall: the bare game domain (/hall/) and its own host.
+HALL = "https://play.example.test"
+HALL_ARCADE = "https://arcade.example.test"
 PASSWORD = "Correct-horse-1"
 
 GAMES_YAML = """games:
@@ -202,6 +205,7 @@ class Env(object):
         savesAccounts=None,
         savesPlayerMaxBytes=10 * 1024 * 1024,
         savesStore=None,
+        hallOrigins=(HALL, HALL_ARCADE),
     ):
         self.fake = FakeUserAuth().start()
         self.registryPath = os.path.join(str(tmpPath), "games.yaml")
@@ -230,6 +234,7 @@ class Env(object):
             operators=operators,
             trustForwardedFor=True,
             defaultReturn=PORTAL + "/play",
+            hallOrigins=hallOrigins,
         )
         self.social = Social(self.config, store=store, savesStore=savesStore)
         self.server = makeServer(self.social, "127.0.0.1", 0)

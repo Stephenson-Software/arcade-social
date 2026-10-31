@@ -7,7 +7,7 @@ import arcade_social
 import json
 from urllib.parse import urlencode
 
-from helpers import FISHE, PASSWORD, PORTAL, SERVICE, TIDEWATER_ALIAS
+from helpers import FISHE, HALL, HALL_ARCADE, PASSWORD, PORTAL, SERVICE, TIDEWATER_ALIAS
 
 FORM = {"Content-Type": "application/x-www-form-urlencoded"}
 
@@ -33,7 +33,7 @@ def test_signin_page_has_csrf_token_and_strict_headers(env):
     policy = page.header("Content-Security-Policy")
     assert "default-src 'none'" in policy and "frame-ancestors 'none'" in policy
     assert "script-src" not in policy
-    assert "form-action 'self' %s https://*.play.example.test https://tidewater.example.test" % PORTAL in policy
+    assert "form-action 'self' %s https://*.play.example.test %s %s https://tidewater.example.test" % (PORTAL, HALL, HALL_ARCADE) in policy
     assert page.header("X-Frame-Options") == "DENY"
     # Not no-referrer: under it browsers send "Origin: null" with form POSTs.
     assert page.header("Referrer-Policy") == "same-origin"

@@ -43,6 +43,15 @@ def _accounts(value):
     return frozenset(_names(value))
 
 
+def _list(value):
+    return tuple(item.strip() for item in (value or "").split(",") if item.strip())
+
+
+# The walkable arcade hall: https://play.danielstephenson.dev/hall/ (the bare
+# game domain) and https://arcade.danielstephenson.dev.
+DEFAULT_HALL_ORIGINS = ("https://play.danielstephenson.dev", "https://arcade.danielstephenson.dev")
+
+
 class ConfigError(ValueError):
     """A configuration value is unusable. The message names the variable."""
 
@@ -75,6 +84,7 @@ class Config(object):
         savesConfigPath="/config/play/saves.yaml",
         savesPlayerMaxBytes=300 * 1024 * 1024,
         savesDatabaseMaxBytes=10 * 1024 * 1024 * 1024,
+        hallOrigins=DEFAULT_HALL_ORIGINS,
     ):
         parsed = urlparse(publicUrl)
         if parsed.scheme not in ("https", "http") or not parsed.hostname or parsed.path not in ("", "/"):
@@ -111,6 +121,30 @@ class Config(object):
         self.savesConfigPath = savesConfigPath
         self.savesPlayerMaxBytes = int(savesPlayerMaxBytes)
         self.savesDatabaseMaxBytes = int(savesDatabaseMaxBytes)
+        self.hallOrigins = self._hallOrigins(hallOrigins)
+
+    def _hallOrigins(self, values):
+        """The walkable hall's origins: https://host each, never a game's slug
+        host, the portal or this service, so no origin is two kinds at once."""
+        checked = []
+        for value in values:
+            parsed = urlparse(value.strip())
+            host = (parsed.hostname or "").lower()
+            try:
+                port = parsed.port
+            except ValueError:
+                port = "bad"
+            if parsed.scheme != "https" or not host or port is not None or parsed.path not in ("", "/") \
+                    or parsed.username or parsed.password or parsed.query or parsed.fragment:
+                raise ConfigError("ARCADE_SOCIAL_HALL_ORIGINS entries must be https://host, got %r" % value)
+            origin = "https://" + host
+            if host.endswith("." + self.gameDomain) or origin in (self.portalOrigin, self.serviceOrigin):
+                raise ConfigError(
+                    "ARCADE_SOCIAL_HALL_ORIGINS entry %r is a game, the portal or this service" % value
+                )
+            if origin not in checked:
+                checked.append(origin)
+        return tuple(checked)
 
     @classmethod
     def fromEnvironment(cls, environ=None):
@@ -144,6 +178,7 @@ class Config(object):
                 savesConfigPath=get("SAVES_CONFIG", "/config/play/saves.yaml"),
                 savesPlayerMaxBytes=int(get("SAVES_PLAYER_MAX_BYTES", str(300 * 1024 * 1024))),
                 savesDatabaseMaxBytes=int(get("SAVES_DB_MAX_BYTES", str(10 * 1024 * 1024 * 1024))),
+                hallOrigins=_list(get("HALL_ORIGINS", ",".join(DEFAULT_HALL_ORIGINS))),
             )
         except ValueError as e:
             if isinstance(e, ConfigError):

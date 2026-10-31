@@ -59,7 +59,8 @@ can (sign-in, declared boards, bounds, rate caps) and labels every leaderboard r
    ever sent them. The `__Host-` prefix makes browsers enforce that (and `Secure`, `Path=/`). No page
    script can read them.
 3. A player without a display name goes to `/welcome` to choose one, then back to the `return` URL. The
-   return URL must be `https://` on the portal, a registry game (slug host or alias) or this service;
+   return URL must be `https://` on the portal, a registry game (slug host or alias), a hall origin
+   (e.g. `https://play.danielstephenson.dev/hall/?at=<slug>`) or this service;
    anything else falls back to `ARCADE_SOCIAL_DEFAULT_RETURN`, so the page is not an open redirect.
 4. Pages then call the API with `fetch(url, {credentials: "include"})`. Game origins and the service are
    the same *site*, so `SameSite=Lax` cookies are sent.
@@ -88,8 +89,16 @@ nothing else, although it holds the same cookie as every other game.
 | `https://<slug>.play.danielstephenson.dev`, for a slug in arcade's registry | that game |
 | `https://<alias>`, for an alias in arcade's registry | that alias's game |
 | `https://danielstephenson.dev` (the portal) | the portal |
+| `https://play.danielstephenson.dev` (the walkable hall at `/hall/`) and `https://arcade.danielstephenson.dev` (`ARCADE_SOCIAL_HALL_ORIGINS`) | the hall: session, likes and the player's own bests; never scores, achievements, cloud saves or deletion |
 | `https://api.play.danielstephenson.dev` (this service) | the service (operator writes only) |
 | anything else, or no `Origin` | nobody: no credentialed access |
+
+The bare game domain (`play.danielstephenson.dev`) is never a game: a slug is a non-empty label, so it is
+callable only as a configured hall origin. The hall may use `GET /v1/session`, `POST /v1/signout`,
+`GET /v1/likes/me`, `POST`/`DELETE /v1/likes/<slug>` for any registry game (as the portal may),
+`GET /v1/me/<slug>` and `around-me`, and every public route. Any other signed-in route answers 403, and its
+CORS preflight is refused. A hall origin may not also be a slug host, the portal or this service: the
+service refuses to start with one.
 
 The registry is arcade's own `games.yaml`, read with arcade's own parser (`src/arcade_social/registry.py`
 is vendored byte-for-byte; a test pins its hash) and reloaded when the file changes.
@@ -238,7 +247,7 @@ gateway's `secure-headers` (`strict-origin-when-cross-origin`) is fine.
 | `GET /version.json` | `{"version": "<arcade_social.__version__>"}`, `application/json`, `Cache-Control: no-store`, no sign-in: lets a deploy be verified by the version it reports |
 
 Every page is sent with `Content-Security-Policy: default-src 'none'; style-src 'unsafe-inline'; img-src
-'self'; form-action 'self' <portal> https://*.play.<domain> <aliases>; frame-ancestors 'none'; base-uri
+'self'; form-action 'self' <portal> https://*.play.<domain> <hall origins> <aliases>; frame-ancestors 'none'; base-uri
 'none'`, `X-Frame-Options: DENY`, `Referrer-Policy: same-origin` and `Cache-Control: no-store`.
 (`same-origin`, not `no-referrer`: under `no-referrer` browsers send `Origin: null` with a page's own form
 POSTs, and the form check would refuse them.)
@@ -410,6 +419,7 @@ Environment variables, all optional:
 |---|---|---|
 | `ARCADE_SOCIAL_PUBLIC_URL` | `https://api.play.danielstephenson.dev` | This service's own URL (its origin is where cookies live) |
 | `ARCADE_SOCIAL_PORTAL_ORIGIN` | `https://danielstephenson.dev` | The portal origin |
+| `ARCADE_SOCIAL_HALL_ORIGINS` | `https://play.danielstephenson.dev,https://arcade.danielstephenson.dev` | The walkable hall's origins, comma-separated `https://host`; empty for none |
 | `ARCADE_SOCIAL_GAME_DOMAIN` | `play.danielstephenson.dev` | Games are `<slug>.<this>` |
 | `ARCADE_SOCIAL_REGISTRY` | `/config/arcade/games.yaml` | arcade's registry |
 | `ARCADE_SOCIAL_BOARDS` | `/config/play/boards.yaml` | Boards and achievements |
