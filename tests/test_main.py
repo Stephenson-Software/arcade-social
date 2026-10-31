@@ -14,11 +14,11 @@ from arcade_social.store import Store
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.join(HERE, "..")
-# sha256 of Stephenson-Software/arcade src/arcade/registry.py at
-# c34f931bca31482eb09bcee959e949922680b9e6. Re-vendor (copy the file, update
+# sha256 of Stephenson-Software/arcade src/arcade/registry.py as of arcade#65
+# (tags and engine; self-contained). Re-vendor (copy the file, update
 # this) whenever arcade's registry format changes, or this service will refuse
 # a games.yaml that arcade accepts.
-ARCADE_REGISTRY_SHA256 = "175ab28ffec871691ea095f2ee10422fc298c0f6e3f854d92c3f3782c83e1c27"
+ARCADE_REGISTRY_SHA256 = "b2aa65fc7681ff8601158a7298e1baf081060b3b83a17187a330055989a3106d"
 
 
 @pytest.fixture
