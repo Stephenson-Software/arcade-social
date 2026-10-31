@@ -37,6 +37,11 @@ ACHIEVEMENTS_PER_PLAYER = Limit("achievements-player", 100, 3600)
 ACCOUNT_FORMS_PER_PLAYER = Limit("account-player", 20, 3600)
 # Per account and game (RFC 0016 §6): a page uploads at most once per 30 s.
 SAVES_UPLOADS_PER_GAME = Limit("saves-uploads", 120, 3600)
+# Hall presence (RFC 0030 §4): a pose about once a second. Two per second per
+# player; per IP, room for a household of opted-in players. These posts do not
+# count toward writes-ip, which a single 1 Hz hall would use up on its own.
+PRESENCE_POSTS_PER_PLAYER = Limit("presence-player", 2, 1)
+PRESENCE_POSTS_PER_IP = Limit("presence-ip", 600, 60)
 
 
 class RateLimiter(object):

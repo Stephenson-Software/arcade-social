@@ -18,6 +18,11 @@ All notable changes to this project are documented in this file. The format is b
   `https://play.danielstephenson.dev,https://arcade.danielstephenson.dev`): it may read the session, the
   player's likes and own bests, and like or unlike any registry game, but never submit scores or
   achievements, use cloud saves or delete data. Hall URLs are valid sign-in `return` targets.
+- Live presence in the walkable hall (RFC 0030 §4), opt-in: `GET/POST/DELETE /v1/presence`,
+  `GET /v1/presence/me`, `POST/DELETE /v1/presence/optin` and a toggle on `/account`. Poses are kept in
+  memory for 10 s only and never written or logged; listings carry display names and random per-visit ids,
+  at most 50 people. The opt-in flag is a new column on the player row (schema version 4), exported and
+  deleted with the account; deleted, opted-out and excluded accounts disappear at once.
 
 ### Fixed
 

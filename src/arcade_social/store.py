@@ -108,6 +108,15 @@ MIGRATIONS = (
             "CREATE INDEX idx_game_like_slug ON game_like (slug)",
         ),
     ),
+    (
+        4,
+        "hall presence opt-in (RFC 0030 §4)",
+        (
+            # "Show me in the hall": off (0) unless the player turns it on. The
+            # only presence datum written to disk; live positions never are.
+            "ALTER TABLE player ADD COLUMN hall_presence INTEGER NOT NULL DEFAULT 0",
+        ),
+    ),
 )
 
 _EXCLUDED = "(SELECT p.id FROM player p JOIN exclusion e ON e.username = p.username)"
@@ -333,7 +342,41 @@ class Store(object):
                 ),
                 "achievements": rows("SELECT slug, achievement, unlocked_at FROM unlock WHERE player_id = ? ORDER BY slug, unlocked_at"),
                 "likes": rows("SELECT slug, created_at FROM game_like WHERE player_id = ? ORDER BY created_at"),
+                "hallPresence": bool(player["hall_presence"]),
             }
+
+    # --- hall presence (RFC 0030 §4) ----------------------------------------------
+
+    def isExcluded(self, username):
+        with self.reading() as connection:
+            row = connection.execute("SELECT 1 FROM exclusion WHERE username = ?", (username,)).fetchone()
+            return row is not None
+
+    def setHallPresence(self, playerId, on):
+        with self.writing() as connection:
+            connection.execute("UPDATE player SET hall_presence = ? WHERE id = ?", (1 if on else 0, playerId))
+
+    def presenceVisible(self, playerIds):
+        """The subset of player ids that may appear in the hall now: the row
+        exists, has a display name, is opted in and is not excluded. Read on
+        every presence listing, so a deletion, opt-out or exclusion made by
+        any process (the admin command line too) takes effect at once."""
+        playerIds = list(playerIds)
+        if not playerIds:
+            return set()
+        visible = set()
+        with self.reading() as connection:
+            # in chunks: older SQLite allows 999 parameters per statement
+            for start in range(0, len(playerIds), 500):
+                chunk = playerIds[start : start + 500]
+                rows = connection.execute(
+                    "SELECT id FROM player WHERE hall_presence = 1 AND display_name IS NOT NULL "
+                    "AND username NOT IN (SELECT username FROM exclusion) AND id IN (%s)"
+                    % ",".join("?" * len(chunk)),
+                    chunk,
+                ).fetchall()
+                visible.update(row["id"] for row in rows)
+        return visible
 
     # --- scores -------------------------------------------------------------------
 

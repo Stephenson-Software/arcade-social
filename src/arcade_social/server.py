@@ -35,6 +35,7 @@ import traceback
 from urllib.parse import parse_qs, unquote, urlencode, urlparse, urlunparse
 
 from arcade_social import __version__, config as configModule, displaynames, origins, pages, ratelimit
+from arcade_social import presence as presenceModule
 from arcade_social import saves as savesModule
 from arcade_social.saves_store import SavesStore
 from arcade_social.store import NameHeld, NameTaken, NameTooSoon, Store
@@ -54,6 +55,7 @@ _ID = re.compile(r"^[a-z][a-z0-9-]{1,30}$")
 _RUN = re.compile(r"^[A-Za-z0-9._:-]{1,64}$")
 _USERNAME = re.compile(r"^[^/\s]{1,50}$")
 _STORE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
+_LAYOUT = re.compile(r"^[A-Za-z0-9._:-]{1,64}$")
 # Room in an upload body for the fields around the save file itself.
 UPLOAD_OVERHEAD_BYTES = 64 * 1024
 
@@ -80,6 +82,13 @@ ROUTES = (
     ("GET", r"^/v1/likes/me$", "apiMyLikes", PRIVATE),
     ("POST", r"^/v1/likes/(?P<slug>[^/]+)$", "apiLike", WRITE),
     ("DELETE", r"^/v1/likes/(?P<slug>[^/]+)$", "apiUnlike", WRITE),
+    # hall presence (RFC 0030 §4): in memory only; the hall and the portal only
+    ("GET", r"^/v1/presence$", "apiPresenceList", PUBLIC),
+    ("POST", r"^/v1/presence$", "apiPresencePost", WRITE),
+    ("DELETE", r"^/v1/presence$", "apiPresenceLeave", WRITE),
+    ("GET", r"^/v1/presence/me$", "apiPresenceMe", PRIVATE),
+    ("POST", r"^/v1/presence/optin$", "apiPresenceOptIn", WRITE),
+    ("DELETE", r"^/v1/presence/optin$", "apiPresenceOptOut", WRITE),
     # cloud saves (RFC 0016): the game is always the caller's Origin
     ("GET", r"^/v1/saves/(?P<store>[^/]+)$", "apiSavesStatus", PRIVATE),
     ("PUT", r"^/v1/saves/(?P<store>[^/]+)$", "apiSavesUpload", WRITE),
@@ -100,7 +109,22 @@ ROUTES = (
 # The signed-in routes the walkable hall may use: who is signed in, likes, and
 # reading the player's own bests. Everything else signed-in - scores,
 # achievements, cloud saves, deleting data - stays with the games and the portal.
-HALL_ROUTES = frozenset(("apiSession", "apiSignOut", "apiMyLikes", "apiLike", "apiUnlike", "apiMe", "apiAround"))
+HALL_ROUTES = frozenset(
+    (
+        "apiSession",
+        "apiSignOut",
+        "apiMyLikes",
+        "apiLike",
+        "apiUnlike",
+        "apiMe",
+        "apiAround",
+        "apiPresencePost",
+        "apiPresenceLeave",
+        "apiPresenceMe",
+        "apiPresenceOptIn",
+        "apiPresenceOptOut",
+    )
+)
 _COMPILED = tuple((method, re.compile(pattern), name, access) for method, pattern, name, access in ROUTES)
 
 log = configModule.log
@@ -146,6 +170,8 @@ class Social(object):
         )
         self.limiter = limiter if limiter is not None else ratelimit.RateLimiter(clock)
         self.clock = clock
+        # Live hall poses: this process's memory only, never written anywhere.
+        self.presence = presenceModule.Presence()
 
     @property
     def registry(self):
@@ -196,8 +222,15 @@ class Social(object):
         §8), never orphaned saves without a player to find them by."""
         player = self.store.player(username)
         if player is not None:
+            self.presence.remove(player["id"])
             self.savesStore.deletePlayer(player["id"])
         return self.store.deletePlayer(username)
+
+    def forgetPresence(self, username):
+        """Take an account out of the hall now (exclusion)."""
+        player = self.store.player(username)
+        if player is not None:
+            self.presence.remove(player["id"])
 
     def maintain(self):
         removed = self.store.pruneLog(self.config.logRetentionDays)
@@ -499,7 +532,10 @@ def makeHandler(social):
             if access in (PRIVATE, WRITE) and caller.kind == origins.HALL and name not in HALL_ROUTES:
                 raise ApiError(403, "the arcade hall may not use this endpoint")
             if access in (WRITE, ADMIN_WRITE):
-                self._limit(ratelimit.API_WRITES_PER_IP, self._clientIp())
+                if name == "apiPresencePost":
+                    self._limit(ratelimit.PRESENCE_POSTS_PER_IP, self._clientIp())
+                else:
+                    self._limit(ratelimit.API_WRITES_PER_IP, self._clientIp())
                 self._writeGuard(caller, admin=access == ADMIN_WRITE)
             if access in (ADMIN_READ, ADMIN_WRITE):
                 origin = self.headers.get("Origin")
@@ -885,6 +921,117 @@ def makeHandler(social):
             player = social.store.player(username)
             self._json(200, social.store.likedBy(player["id"]) if player is not None else [])
 
+        # hall presence (RFC 0030 §4)
+
+        def _presenceCaller(self, caller):
+            if caller is None or caller.kind not in (origins.HALL, origins.PORTAL):
+                raise ApiError(403, "presence answers only the arcade hall and the portal")
+
+        def _coordinate(self, body, name, bound):
+            value = body.get(name)
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                raise ApiError(400, "%s must be a number" % name)
+            value = float(value)
+            if not math.isfinite(value) or (bound is not None and abs(value) > bound):
+                raise ApiError(
+                    400, "%s must be finite" % name + ("" if bound is None else " and within ±%g" % bound)
+                )
+            return value
+
+        def _layout(self, value):
+            if not isinstance(value, str) or not _LAYOUT.match(value):
+                raise ApiError(400, "layout must be 1-64 characters of letters, digits and . _ : -")
+            return value
+
+        def apiPresenceList(self, caller):
+            self._presenceCaller(caller)
+            layout = self._layout(self._param("layout"))
+            live = social.presence.snapshot(layout)
+            visible = social.store.presenceVisible(playerId for playerId, _ in live)
+            people = []
+            for playerId, person in live:
+                if playerId not in visible:
+                    # deleted, opted out, renamed away or excluded since it was sent
+                    social.presence.remove(playerId)
+                elif len(people) < presenceModule.MAX_PEOPLE:
+                    people.append(person)
+            self._json(200, {"people": people, "ttl": social.presence.ttl})
+
+        def apiPresencePost(self, caller):
+            self._presenceCaller(caller)
+            body = self._jsonBody(("x", "z", "yaw", "cabinet", "layout"))
+            bound = presenceModule.MAX_COORDINATE
+            x = self._coordinate(body, "x", bound)
+            z = self._coordinate(body, "z", bound)
+            yaw = self._coordinate(body, "yaw", 1000.0)
+            layout = self._layout(body.get("layout"))
+            cabinet = body.get("cabinet")
+            if cabinet is not None and (
+                not isinstance(cabinet, str)
+                or not _SLUG.match(cabinet)
+                or social.registry.get(cabinet) is None
+            ):
+                raise ApiError(400, "cabinet must be null or a game in the registry")
+            username, player = self._requirePlayer(create=False)
+            if player is None or not player["hall_presence"]:
+                raise ApiError(403, "turn on \"Show me in the hall\" first", presence="not-opted-in")
+            if player["display_name"] is None:
+                raise ApiError(409, "choose a display name first", welcome=config.publicUrl + "/welcome")
+            if social.store.isExcluded(username):
+                social.presence.remove(player["id"])
+                raise ApiError(403, "this account cannot appear in the hall", presence="excluded")
+            self._limit(ratelimit.PRESENCE_POSTS_PER_PLAYER, player["id"])
+            try:
+                presenceId = social.presence.update(
+                    player["id"], player["display_name"], x, z, yaw, cabinet, layout
+                )
+            except presenceModule.Full:
+                raise ApiError(503, "the hall is full; try again shortly", headers=(("Retry-After", "10"),))
+            self._json(200, {"ok": True, "ttl": social.presence.ttl, "id": presenceId})
+
+        def apiPresenceLeave(self, caller):
+            self._presenceCaller(caller)
+            self._jsonBody(())
+            username, player = self._requirePlayer(create=False)
+            if player is not None:
+                social.presence.remove(player["id"])
+            self._json(200, {"ok": True})
+
+        def apiPresenceMe(self, caller):
+            self._presenceCaller(caller)
+            username, player = self._requirePlayer(create=False)
+            self._json(200, {"optedIn": bool(player is not None and player["hall_presence"])})
+
+        def _optIn(self, username, player):
+            """None, or why this account may not appear in the hall."""
+            if social.store.isExcluded(username):
+                return "This account cannot appear in the hall."
+            if player["display_name"] is None:
+                return "Choose a display name first."
+            social.store.setHallPresence(player["id"], True)
+            return None
+
+        def apiPresenceOptIn(self, caller):
+            self._presenceCaller(caller)
+            self._jsonBody(())
+            username, player = self._requirePlayer()
+            self._limit(ratelimit.API_WRITES_PER_PLAYER, player["id"])
+            if social.store.isExcluded(username):
+                raise ApiError(403, "this account cannot appear in the hall", presence="excluded")
+            if player["display_name"] is None:
+                raise ApiError(409, "choose a display name first", welcome=config.publicUrl + "/welcome")
+            self._optIn(username, player)
+            self._json(200, {"optedIn": True})
+
+        def apiPresenceOptOut(self, caller):
+            self._presenceCaller(caller)
+            self._jsonBody(())
+            username, player = self._requirePlayer(create=False)
+            if player is not None:
+                social.store.setHallPresence(player["id"], False)
+                social.presence.remove(player["id"])
+            self._json(200, {"optedIn": False})
+
         # cloud saves (RFC 0016)
 
         def _savesError(self, error):
@@ -1070,6 +1217,7 @@ def makeHandler(social):
             if reason is not None and (not isinstance(reason, str) or len(reason) > 200):
                 raise ApiError(400, "reason must be a string of at most 200 characters")
             social.store.exclude(username, reason)
+            social.forgetPresence(username)
             log("operator excluded an account from leaderboards")
             self._json(200, {"excluded": username})
 
@@ -1149,6 +1297,7 @@ def makeHandler(social):
                 ("GET", "/account/saves/download"): self.pageSavesDownload,
                 ("POST", "/account/saves/delete"): self.postSavesDelete,
                 ("POST", "/account/delete"): self.postDelete,
+                ("POST", "/account/presence"): self.postPresence,
                 ("POST", "/signout"): self.postSignOut,
             }.get((method, path))
             if route is None:
@@ -1338,8 +1487,28 @@ def makeHandler(social):
                     error,
                     notice,
                     self._nextChange(player),
+                    bool(player["hall_presence"]),
                 ),
             )
+
+        def postPresence(self):
+            fields = self._form()
+            session = self._pageSession()
+            if session is None:
+                return
+            username, player = session
+            self._limit(ratelimit.ACCOUNT_FORMS_PER_PLAYER, player["id"])
+            if fields.get("show") == "on":
+                error = self._optIn(username, player)
+                if error:
+                    self.pageAccount(error=error, status=403 if "cannot" in error else 400)
+                    return
+                notice = "You now appear in the arcade hall, by display name, while you have it open."
+            else:
+                social.store.setHallPresence(player["id"], False)
+                social.presence.remove(player["id"])
+                notice = "You no longer appear in the arcade hall."
+            self.pageAccount(notice=notice)
 
         def pageChangeName(self):
             session = self._pageSession()
@@ -1483,7 +1652,8 @@ def makeHandler(social):
                 200,
                 pages.message(
                     "Your data is deleted",
-                    "Every score, achievement, like, cloud save and your display name are gone from this service, "
+                    "Every score, achievement, like, cloud save, your hall presence and your display name "
+                    "are gone from this service, "
                     "and you are signed out. Your UserAuth account itself still exists.",
                     config.defaultReturn,
                     "Back to the games",

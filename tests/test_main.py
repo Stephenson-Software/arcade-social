@@ -36,7 +36,7 @@ def test_registry_is_vendored_unchanged():
 
 def test_backup_and_migrate(database, tmp_path, capsys):
     assert cli.main(["migrate"]) == 0
-    assert "schema version 3 (was 0)" in capsys.readouterr().out
+    assert "schema version 4 (was 0)" in capsys.readouterr().out
     store = Store(database)
     player = store.ensurePlayer("alice")
     store.like(player["id"], "fishe")

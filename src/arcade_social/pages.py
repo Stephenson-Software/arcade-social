@@ -155,7 +155,17 @@ def chooseName(csrf, returnUrl, error=None, value="", current=None, nextChange=N
     )
 
 
-def account(csrf, username, displayName, summary, returnUrl, error=None, notice=None, nextChange=None):
+def account(
+    csrf,
+    username,
+    displayName,
+    summary,
+    returnUrl,
+    error=None,
+    notice=None,
+    nextChange=None,
+    hallPresence=False,
+):
     name = _e(displayName) if displayName else "<em>not chosen yet</em>"
     change = (
         '<p class="hint">Next change possible on %s.</p>' % _e(nextChange)
@@ -173,10 +183,20 @@ def account(csrf, username, displayName, summary, returnUrl, error=None, notice=
 <p><a href="/account/saves">Cloud saves</a></p>
 <form method="post" action="/signout">%s<button class="quiet" type="submit">Sign out</button></form>
 </div>
+<form class="card" style="margin-top:1rem" method="post" action="/account/presence">%s
+<h2 style="font-size:1.1rem;margin:0">Show me in the arcade hall</h2>
+<p class="muted">%s</p>
+<p class="hint">While it is on and the walkable hall is open, other visitors see a figure with your display
+name, where you stand, which way you face and which game you are playing. Positions are kept in memory for
+10 seconds and are never written to disk or logged.</p>
+<input type="hidden" name="show" value="%s">
+<button type="submit">%s</button>
+</form>
 <hr>
 <form class="card" method="post" action="/account/delete">%s
 <h2 style="font-size:1.1rem;margin:0">Delete my data</h2>
-<p class="muted">Deletes every score, achievement, like, cloud save and your display name from this service, now.
+<p class="muted">Deletes every score, achievement, like, cloud save, your hall presence and your display name
+from this service, now.
 It does not delete your UserAuth account itself (UserAuth has no way to do that yet; ask the site owner).
 Backups age out on their own schedule.</p>
 <label for="confirm">Type <strong>delete</strong> to confirm</label>
@@ -193,6 +213,10 @@ Backups age out on their own schedule.</p>
             summary["unlocks"],
             summary["likes"],
             _hidden(csrf, returnUrl),
+            _hidden(csrf, returnUrl),
+            "On: you appear in the hall." if hallPresence else "Off: nobody sees you in the hall.",
+            "off" if hallPresence else "on",
+            "Stop showing me" if hallPresence else "Show me in the hall",
             _hidden(csrf, returnUrl),
             _e(returnUrl),
         ),
