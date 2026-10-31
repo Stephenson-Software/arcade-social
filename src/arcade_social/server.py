@@ -73,6 +73,7 @@ ROUTES = (
     ("POST", r"^/v1/achievements/(?P<achievement>[^/]+)$", "apiUnlock", WRITE),
     ("GET", r"^/v1/games/(?P<slug>[^/]+)/boards$", "apiBoards", PUBLIC),
     ("GET", r"^/v1/games/(?P<slug>[^/]+)/achievements$", "apiAchievements", PUBLIC),
+    ("GET", r"^/v1/boards/top$", "apiChampions", PUBLIC),
     ("GET", r"^/v1/boards/(?P<slug>[^/]+)/(?P<board>[^/]+)$", "apiTop", PUBLIC),
     ("GET", r"^/v1/boards/(?P<slug>[^/]+)/(?P<board>[^/]+)/around-me$", "apiAround", PRIVATE),
     ("GET", r"^/v1/me/(?P<slug>[^/]+)$", "apiMe", PRIVATE),
@@ -802,6 +803,21 @@ def makeHandler(social):
                 ),
                 cache="public, max-age=15",
             )
+
+        def apiChampions(self, caller):
+            """Every declared board of every game arcade serves, with its #1
+            entry or null: what the hall's Hall of Fame shows, in one request
+            and one query instead of one per game and one per board."""
+            champions = social.store.champions()
+            listed = []
+            for game in social.registry:
+                declarations = social.boards.get(game.slug)
+                for declared in declarations.listBoards() if declarations else []:
+                    entry = champions.get((game.slug, declared.id), {}).get(declared.order)
+                    if entry is not None:
+                        entry["achievedAt"] = _iso(entry["achievedAt"])
+                    listed.append({"slug": game.slug, "board": declared.describe(), "top": entry})
+            self._json(200, self._notice({"boards": listed}), cache="public, max-age=60")
 
         def apiAround(self, caller, slug, board):
             slug = self._slugFor(caller, slug)

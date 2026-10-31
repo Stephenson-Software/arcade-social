@@ -140,6 +140,7 @@ The UserAuth username is never returned by the API (it is private); only the dis
 | `POST` | `/v1/scores/<board>` | write, **game origin only** | `{value, run?}` → `{slug, board, best, improved, rank}` |
 | `GET` | `/v1/games/<slug>/boards` | public | The game's board declarations |
 | `GET` | `/v1/boards/<slug>/<board>?limit=10` | public | `{board, entries: [{id, rank, displayName, value, achievedAt}], total}`; `limit` 1–100 |
+| `GET` | `/v1/boards/top` | public | Every declared board of every registry game with its #1: `{boards: [{slug, board, top: {displayName, value, achievedAt} \| null}]}`; cached 60 s |
 | `GET` | `/v1/boards/<slug>/<board>/around-me?window=5` | private | The entries around the player's own: `{entries, me}`; `window` 1–25 |
 | `GET` | `/v1/me/<slug>` | private | `{displayName, bests: [{board, value, rank, achievedAt}], achievements: [...]}` |
 | `DELETE` | `/v1/me/<slug>` | write | Deletes the player's scores, submissions and unlocks for that game → `{slug, deleted}` |
@@ -156,6 +157,11 @@ The UserAuth username is never returned by the API (it is private); only the dis
 - Ranks are competition ranks: equal values share a rank (1, 1, 3); among equal values whoever reached it
   first is listed first. Excluded accounts are left out of every board, rank and percentage.
 - A game page may ask `around-me`/`me` only about its own slug; the portal may ask about any.
+- `/v1/boards/top` lists boards in registry order, then each game's declaration order; a game with no
+  boards (or one `boards.yaml` names but arcade does not serve) is absent, and a board nobody visible has
+  scored on has `top: null`. Its #1 is exactly the first entry of `/v1/boards/<slug>/<board>?limit=1`: the
+  same exclusions, display-name rule and tie order. One database query answers it, however many boards
+  there are; `Cache-Control: public, max-age=60`. The walkable hall's Hall of Fame reads it.
 
 ### Achievements (RFC 0014)
 

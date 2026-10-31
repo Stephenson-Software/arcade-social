@@ -492,6 +492,35 @@ class Store(object):
             total = self._visibleCount(connection, slug, board)
             return entries, total
 
+    def champions(self):
+        """The best visible entry on every board that has one, in one query:
+        {(slug, boardId): {"desc": entry, "asc": entry}}. Which of the two is
+        a board's #1 depends on its declared order, which the database does
+        not hold, so both ends come back and the caller picks. Visibility and
+        tie-breaking are exactly _entries' (a display name, not excluded;
+        equal values: whoever reached it first)."""
+        with self.reading() as connection:
+            rows = connection.execute(
+                "SELECT slug, board, value, achieved_at, display_name, byDesc, byAsc FROM ("
+                "SELECT s.slug, s.board, s.value, s.achieved_at, p.display_name, "
+                "ROW_NUMBER() OVER (PARTITION BY s.slug, s.board ORDER BY s.value DESC, s.achieved_at ASC, s.id ASC) "
+                "AS byDesc, "
+                "ROW_NUMBER() OVER (PARTITION BY s.slug, s.board ORDER BY s.value ASC, s.achieved_at ASC, s.id ASC) "
+                "AS byAsc "
+                "FROM score_best s JOIN player p ON p.id = s.player_id "
+                "WHERE p.display_name IS NOT NULL AND s.player_id NOT IN %s"
+                ") WHERE byDesc = 1 OR byAsc = 1" % _EXCLUDED
+            ).fetchall()
+            found = {}
+            for row in rows:
+                entry = {"displayName": row["display_name"], "value": row["value"], "achievedAt": row["achieved_at"]}
+                ends = found.setdefault((row["slug"], row["board"]), {})
+                if row["byDesc"] == 1:
+                    ends["desc"] = entry
+                if row["byAsc"] == 1:
+                    ends["asc"] = dict(entry)
+            return found
+
     def _visibleCount(self, connection, slug, board):
         return connection.execute(
             "SELECT COUNT(*) FROM score_best s JOIN player p ON p.id = s.player_id "
