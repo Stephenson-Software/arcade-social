@@ -44,11 +44,32 @@ def _tables(path):
 # --- migrations -----------------------------------------------------------------------
 
 
+def test_the_hall_presence_opt_in_is_added_off_for_existing_players(tmp_path):
+    """Version 3 to 4 adds the opt-in column, off for every existing player."""
+    path = str(tmp_path / "db.sqlite3")
+    old = Store(path, migrations=MIGRATIONS[:3])
+    old.ensurePlayer("alice")
+    old.setDisplayName("alice", "Alice", "allce", 30, 30)
+    new = Store(path)
+    assert new.migrated == (3, 4)
+    player = new.player("alice")
+    assert player["display_name"] == "Alice" and player["hall_presence"] == 0
+    new.setHallPresence(player["id"], True)
+    assert new.player("alice")["hall_presence"] == 1
+    assert new.export("alice")["hallPresence"] is True
+    assert new.presenceVisible([player["id"], 999]) == {player["id"]}
+    new.exclude("alice", None)
+    assert new.presenceVisible([player["id"]]) == set()
+    new.unexclude("alice")
+    assert new.deletePlayer("alice")
+    assert new.presenceVisible([player["id"]]) == set()
+
+
 def test_fresh_database_is_migrated_to_the_latest_version_in_wal_mode(tmp_path):
     path = str(tmp_path / "db.sqlite3")
     store = Store(path)
     assert store.migrated == (0, len(MIGRATIONS))
-    assert store.schemaVersion() == 3
+    assert store.schemaVersion() == 4
     assert {"player", "name_hold", "score_best", "score_log", "unlock", "exclusion", "game_like", "schema_version"} <= _tables(path)
     connection = sqlite3.connect(path)
     assert connection.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
@@ -56,7 +77,7 @@ def test_fresh_database_is_migrated_to_the_latest_version_in_wal_mode(tmp_path):
     assert descriptions == [description for _, description, _ in MIGRATIONS]
     connection.close()
     # Opening again applies nothing.
-    assert Store(path).migrated == (3, 3)
+    assert Store(path).migrated == (4, 4)
 
 
 def test_forward_migration_keeps_existing_data(tmp_path):
@@ -69,7 +90,7 @@ def test_forward_migration_keeps_existing_data(tmp_path):
     old.setDisplayName("alice", "Alice", "allce", 30, 30)
     old.submitScore(player["id"], "fishe", BOARD, 77)
     new = Store(path)
-    assert new.migrated == (2, 3)
+    assert new.migrated == (2, 4)
     assert "game_like" in _tables(path)
     assert new.player("alice")["display_name"] == "Alice"
     entries, total = new.top("fishe", BOARD, 10)
@@ -116,7 +137,7 @@ def test_concurrent_first_start_migrates_once(tmp_path):
         thread.join()
     assert errors == []
     connection = sqlite3.connect(path)
-    assert [row[0] for row in connection.execute("SELECT version FROM schema_version")] == [1, 2, 3]
+    assert [row[0] for row in connection.execute("SELECT version FROM schema_version")] == [1, 2, 3, 4]
     connection.close()
 
 
@@ -328,4 +349,4 @@ def test_online_backup_is_a_consistent_copy(store, tmp_path):
     store.backup(destination)
     copy = Store(destination)
     assert copy.likeCounts() == {"fishe": 1}
-    assert copy.schemaVersion() == 3
+    assert copy.schemaVersion() == 4

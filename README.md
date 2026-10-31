@@ -182,6 +182,36 @@ the share of them holding each achievement, to one decimal. A `hidden: true` ach
 - A like on a game that leaves the registry is kept: it still appears in `/v1/likes/me` with the raw
   slug and can still be removed, but it is not in `/v1/likes/counts` and the game cannot be liked again.
 
+### Hall presence (RFC 0030 §4)
+
+Live "people in the hall": a signed-in player who turns on **Show me in the hall** appears in other
+visitors' walkable halls under their display name. Off by default; anyone may watch without appearing.
+These routes answer only the hall origins and the portal (any other `Origin`, or none, is 403).
+
+| Method | Path | Access | Body / result |
+|---|---|---|---|
+| `GET` | `/v1/presence?layout=<key>` | public (hall + portal) | `{people: [{id, name, x, z, yaw, cabinet}], ttl: 10}` |
+| `POST` | `/v1/presence` | write | `{x, z, yaw, cabinet, layout}` → `{ok: true, ttl: 10, id}`; only for an opted-in player |
+| `DELETE` | `/v1/presence` | write | Leaves the hall now (the opt-in stays) → `{ok: true}` |
+| `GET` | `/v1/presence/me` | private | `{optedIn}` |
+| `POST` | `/v1/presence/optin` | write | Turns it on → `{optedIn: true}` |
+| `DELETE` | `/v1/presence/optin` | write | Turns it off and removes the live pose → `{optedIn: false}` |
+
+- `x` and `z` are hall metres, finite, within ±200; `yaw` is radians, finite. The server rounds the
+  position to 0.25 m and the facing to 10° before anyone sees it. `cabinet` is `null` or a registry slug
+  (the game being played). `layout` is the hall's layout key (1–64 of `A-Za-z0-9._:-`); a listing returns
+  only the people sent with the same key, since cabinets move between layouts. Unknown fields → 400.
+- `id` is random, made when a player appears and kept only while they stay present (seen within the last
+  10 s). It is not the account id, so two visits cannot be linked by it. `POST` returns the caller's own
+  `id` so the hall can leave itself out. `name` is the display name; the username is never sent.
+- A listing holds at most 50 people, the most recently seen first. It checks every entry against the
+  database, so an account that is deleted, opted out, or excluded by the operator (from the API or the
+  command line) disappears on the next listing. Exclusion refuses the opt-in and every pose.
+- Not opted in → **403** `{presence: "not-opted-in"}`; excluded → **403** `{presence: "excluded"}`; no
+  display name → **409** `{welcome}`; more than 2 poses a second → **429**; more than 1,000 people present
+  → **503** with `Retry-After: 10`.
+- The opt-in can also be turned on and off on `/account`.
+
 ### Account
 
 | Method | Path | Access | Body / result |
@@ -235,7 +265,8 @@ gateway's `secure-headers` (`strict-origin-when-cross-origin`) is fine.
 | `GET/POST /signin?return=` | Sign in |
 | `GET/POST /register?return=` | Create a UserAuth account, then sign in |
 | `GET/POST /welcome?return=` | Choose a display name (first sign-in) |
-| `GET /account` | Username (private), display name, what is held, sign out, delete |
+| `GET /account` | Username (private), display name, what is held, the hall-presence toggle, sign out, delete |
+| `POST /account/presence` | `show=on` or `show=off`: turn "Show me in the arcade hall" on or off |
 | `GET/POST /account/name` | Change the display name |
 | `GET /account/export` | Download everything held about the account as JSON |
 | `GET /account/saves` | Cloud saves: the newest 20 versions of each game, with downloads and a delete per game |
@@ -301,7 +332,9 @@ UserAuth sees anything:
 | Sign-in attempts | 10 / minute | client IP |
 | Sign-in attempts | 10 / 15 minutes | username |
 | Registrations | 5 / hour | client IP |
-| API writes | 120 / minute | client IP |
+| API writes (except hall poses) | 120 / minute | client IP |
+| Hall poses (`POST /v1/presence`) | 2 / second | account |
+| Hall poses (`POST /v1/presence`) | 600 / minute | client IP |
 | API writes | 60 / minute | account |
 | Achievement unlocks | 100 / hour | account + game |
 | Score submissions | `maxPerHour` per board (default 30) | account + board, counted in the database |
@@ -396,6 +429,12 @@ through random histories against these rules, checking after every step that no 
 
 - **Held:** the UserAuth username (private), a display name, best scores, a 90-day submission log, unlocks,
   likes, timestamps; and the operator's exclusions (username + reason). Nothing else.
+- **Hall presence** (RFC 0030 §4), only for a player who turned on "Show me in the hall": the opt-in
+  flag is stored on the player row (it is in `/account/export`). The live pose (display name, position
+  rounded to 0.25 m, facing rounded to 10°, the game being played, the hall's layout key and a random
+  per-visit id) is held **only in this process's memory**, for 10 seconds after the last update, and is
+  **never written to disk, a database, a backup or a log**; a restart empties it. Opting out, deleting
+  the account or an operator exclusion removes it at once.
 - **Not held:** passwords (forwarded to UserAuth, never stored or logged), IP addresses (only in rate-limit
   memory, for at most one window), user agents, device identifiers. There is no access log.
 - **Export:** `/account/export` gives the player everything held about them.
@@ -403,8 +442,8 @@ through random histories against these rules, checking after every step that no 
   per version, with a random device id, a device label, the uploading origin and times. No IP address or
   user agent.
 - **Deletion:** `/account/delete` or `DELETE /v1/me` removes the player's cloud saves (from
-  `saves.sqlite3`, first) and then the player row and, by cascade, every score, submission, unlock, like and
-  held name, immediately. `/account/saves` or `DELETE /v1/saves/<store>` removes one game's cloud saves;
+  `saves.sqlite3`, first) and then the player row and, by cascade, every score, submission, unlock, like,
+  held name and the hall-presence opt-in, immediately, and removes any live hall pose from memory. `/account/saves` or `DELETE /v1/saves/<store>` removes one game's cloud saves;
   a browser's own saves are never touched by either. `DELETE /v1/me/<slug>` removes one game's scores and
   unlocks. An exclusion the operator made is moderation data and is kept. Backups age out on the backup
   set's own schedule.

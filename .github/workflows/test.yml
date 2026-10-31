@@ -69,7 +69,7 @@ jobs:
           curl -fsS http://127.0.0.1:8080/signin | grep -q 'Sign in to play'
       - name: The database is migrated in WAL mode and can be backed up online
         run: |
-          docker exec social python -m arcade_social migrate | grep -q 'schema version 3'
+          docker exec social python -m arcade_social migrate | grep -q 'schema version 4'
           docker exec social python -m arcade_social backup /data/backup.sqlite3
           docker exec social python -c "import sqlite3; c = sqlite3.connect('/data/arcade-social.sqlite3'); assert c.execute('PRAGMA journal_mode').fetchone()[0] == 'wal'"
       - name: Logs on failure
