@@ -959,8 +959,26 @@ def makeHandler(social):
                 raise ApiError(400, "layout must be 1-64 characters of letters, digits and . _ : -")
             return value
 
+        def _presenceOff(self):
+            """True when ARCADE_SOCIAL_HALL_PRESENCE=off. Every presence call
+            then also empties the in-memory table, so nothing lingers."""
+            if config.hallPresence == "on":
+                return False
+            social.presence.clear()
+            return True
+
+        def _refuseWhenOff(self):
+            if self._presenceOff():
+                raise ApiError(
+                    503, "presence in the arcade hall is switched off", headers=(("Retry-After", "300"),), disabled=True
+                )
+
         def apiPresenceList(self, caller):
             self._presenceCaller(caller)
+            if self._presenceOff():
+                self._layout(self._param("layout"))
+                self._json(200, {"people": [], "ttl": social.presence.ttl, "disabled": True})
+                return
             layout = self._layout(self._param("layout"))
             live = social.presence.snapshot(layout)
             visible = social.store.presenceVisible(playerId for playerId, _ in live)
@@ -975,6 +993,7 @@ def makeHandler(social):
 
         def apiPresencePost(self, caller):
             self._presenceCaller(caller)
+            self._refuseWhenOff()
             body = self._jsonBody(("x", "z", "yaw", "cabinet", "layout"))
             bound = presenceModule.MAX_COORDINATE
             x = self._coordinate(body, "x", bound)
@@ -1008,6 +1027,8 @@ def makeHandler(social):
         def apiPresenceLeave(self, caller):
             self._presenceCaller(caller)
             self._jsonBody(())
+            # Leaving always works, switched off or not.
+            self._presenceOff()
             username, player = self._requirePlayer(create=False)
             if player is not None:
                 social.presence.remove(player["id"])
@@ -1016,7 +1037,10 @@ def makeHandler(social):
         def apiPresenceMe(self, caller):
             self._presenceCaller(caller)
             username, player = self._requirePlayer(create=False)
-            self._json(200, {"optedIn": bool(player is not None and player["hall_presence"])})
+            answer = {"optedIn": bool(player is not None and player["hall_presence"])}
+            if self._presenceOff():
+                answer["disabled"] = True
+            self._json(200, answer)
 
         def _optIn(self, username, player):
             """None, or why this account may not appear in the hall."""
@@ -1029,6 +1053,7 @@ def makeHandler(social):
 
         def apiPresenceOptIn(self, caller):
             self._presenceCaller(caller)
+            self._refuseWhenOff()
             self._jsonBody(())
             username, player = self._requirePlayer()
             self._limit(ratelimit.API_WRITES_PER_PLAYER, player["id"])
@@ -1040,8 +1065,11 @@ def makeHandler(social):
             self._json(200, {"optedIn": True})
 
         def apiPresenceOptOut(self, caller):
+            # Opting out always works, switched off or not: the flag is the
+            # player's choice and outlives the switch.
             self._presenceCaller(caller)
             self._jsonBody(())
+            self._presenceOff()
             username, player = self._requirePlayer(create=False)
             if player is not None:
                 social.store.setHallPresence(player["id"], False)
@@ -1504,6 +1532,7 @@ def makeHandler(social):
                     notice,
                     self._nextChange(player),
                     bool(player["hall_presence"]),
+                    config.hallPresence == "off",
                 ),
             )
 
@@ -1514,6 +1543,9 @@ def makeHandler(social):
                 return
             username, player = session
             self._limit(ratelimit.ACCOUNT_FORMS_PER_PLAYER, player["id"])
+            if fields.get("show") == "on" and self._presenceOff():
+                self.pageAccount(error="Presence in the arcade hall is switched off for now.", status=503)
+                return
             if fields.get("show") == "on":
                 error = self._optIn(username, player)
                 if error:

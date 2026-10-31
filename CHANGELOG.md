@@ -7,6 +7,10 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Added
 
+- `ARCADE_SOCIAL_HALL_PRESENCE=off|on` (default `on`): a kill switch for live hall presence (RFC 0030),
+  like `ARCADE_SOCIAL_SAVES`. Off, listings answer `{people: [], ttl, disabled: true}`, poses and opt-ins
+  answer 503 `{error, disabled: true}`, and the in-memory table is emptied; leaving and opting out still
+  work, and the stored opt-in flag is kept for when it is turned back on.
 - `GET /v1/boards/top` (public, `Cache-Control: public, max-age=60`): every declared board of every
   registry game with its #1 entry (`displayName`, `value`, `achievedAt`) or `null`, labelled
   `"verified": false`, in one request and one database query. Exclusions, hidden names and tie order are

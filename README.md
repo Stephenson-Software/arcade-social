@@ -217,6 +217,13 @@ These routes answer only the hall origins and the portal (any other `Origin`, or
   display name → **409** `{welcome}`; more than 2 poses a second → **429**; more than 1,000 people present
   → **503** with `Retry-After: 10`.
 - The opt-in can also be turned on and off on `/account`.
+- **Kill switch.** `ARCADE_SOCIAL_HALL_PRESENCE=off` (default `on`) turns presence off without a hall
+  deploy: `GET /v1/presence` answers `{people: [], ttl, disabled: true}`, `POST /v1/presence` and
+  `POST /v1/presence/optin` answer **503** `{error, disabled: true}` with `Retry-After: 300`, and every
+  presence call empties the in-memory table. `GET /v1/presence/me` adds `disabled: true`. Leaving
+  (`DELETE /v1/presence`) and opting out (`DELETE /v1/presence/optin`, or `/account`) keep working, and the
+  opt-in flag on the player row is kept, so a player who opted in is shown again when it is turned back on.
+  `/account` says it is switched off and refuses turning it on (503).
 
 ### Account
 
@@ -481,6 +488,7 @@ Environment variables, all optional:
 | `ARCADE_SOCIAL_LOG_RETENTION_DAYS` | `90` | Score submission log retention |
 | `ARCADE_SOCIAL_DEFAULT_RETURN` | `https://danielstephenson.dev/play` | Where sign-in returns when `return` is missing or refused |
 | `ARCADE_SOCIAL_HOST` / `ARCADE_SOCIAL_PORT` | `0.0.0.0` / `8080` | Listen address |
+| `ARCADE_SOCIAL_HALL_PRESENCE` | `on` | Live presence in the hall (RFC 0030): `on`, or `off` to show nobody and refuse poses and opt-ins |
 | `ARCADE_SOCIAL_SAVES` | `off` | Cloud saves: `off`, `readonly` or `on` (RFC 0016 §7) |
 | `ARCADE_SOCIAL_SAVES_ACCOUNTS` | (nobody) | Usernames that may enroll and upload, comma-separated; `*` for everyone |
 | `ARCADE_SOCIAL_SAVES_DB` | `/data/saves.sqlite3` | The cloud-saves database (a second file) |

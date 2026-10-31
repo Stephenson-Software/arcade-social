@@ -85,6 +85,7 @@ class Config(object):
         savesPlayerMaxBytes=300 * 1024 * 1024,
         savesDatabaseMaxBytes=10 * 1024 * 1024 * 1024,
         hallOrigins=DEFAULT_HALL_ORIGINS,
+        hallPresence="on",
     ):
         parsed = urlparse(publicUrl)
         if parsed.scheme not in ("https", "http") or not parsed.hostname or parsed.path not in ("", "/"):
@@ -122,6 +123,12 @@ class Config(object):
         self.savesPlayerMaxBytes = int(savesPlayerMaxBytes)
         self.savesDatabaseMaxBytes = int(savesDatabaseMaxBytes)
         self.hallOrigins = self._hallOrigins(hallOrigins)
+        hallPresence = str(hallPresence).strip().lower()
+        if hallPresence not in ("off", "on"):
+            raise ConfigError("ARCADE_SOCIAL_HALL_PRESENCE must be off or on, got %r" % hallPresence)
+        # The kill switch for live presence (RFC 0030): off answers every
+        # listing with nobody and refuses new poses and opt-ins, without a hall deploy.
+        self.hallPresence = hallPresence
 
     def _hallOrigins(self, values):
         """The walkable hall's origins: https://host each, never a game's slug
@@ -179,6 +186,7 @@ class Config(object):
                 savesPlayerMaxBytes=int(get("SAVES_PLAYER_MAX_BYTES", str(300 * 1024 * 1024))),
                 savesDatabaseMaxBytes=int(get("SAVES_DB_MAX_BYTES", str(10 * 1024 * 1024 * 1024))),
                 hallOrigins=_list(get("HALL_ORIGINS", ",".join(DEFAULT_HALL_ORIGINS))),
+                hallPresence=get("HALL_PRESENCE", "on"),
             )
         except ValueError as e:
             if isinstance(e, ConfigError):

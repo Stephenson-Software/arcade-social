@@ -165,6 +165,7 @@ def account(
     notice=None,
     nextChange=None,
     hallPresence=False,
+    presenceDisabled=False,
 ):
     name = _e(displayName) if displayName else "<em>not chosen yet</em>"
     change = (
@@ -185,7 +186,7 @@ def account(
 </div>
 <form class="card" style="margin-top:1rem" method="post" action="/account/presence">%s
 <h2 style="font-size:1.1rem;margin:0">Show me in the arcade hall</h2>
-<p class="muted">%s</p>
+<p class="muted">%s</p>%s
 <p class="hint">While it is on and the walkable hall is open, other visitors see a figure with your display
 name, where you stand, which way you face and which game you are playing. Positions are kept in memory for
 10 seconds and are never written to disk or logged.</p>
@@ -215,6 +216,12 @@ Backups age out on their own schedule.</p>
             _hidden(csrf, returnUrl),
             _hidden(csrf, returnUrl),
             "On: you appear in the hall." if hallPresence else "Off: nobody sees you in the hall.",
+            (
+                '\n<p class="hint">Presence in the hall is switched off for now: nobody is shown, whatever this '
+                "setting says. Your choice is kept for when it returns.</p>"
+            )
+            if presenceDisabled
+            else "",
             "off" if hallPresence else "on",
             "Stop showing me" if hallPresence else "Show me in the hall",
             _hidden(csrf, returnUrl),
