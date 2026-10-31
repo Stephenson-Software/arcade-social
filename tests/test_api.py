@@ -502,3 +502,111 @@ def test_a_registered_game_with_no_declarations_lists_empty_not_404(env):
     assert client.request("GET", "/v1/games/no-such-game/achievements").status == 404
     # And a board under an undeclaring game is still not a board.
     assert client.request("GET", "/v1/boards/tidewater/anything").status == 404
+
+
+# --- GET /v1/boards/top: every board's #1 in one request --------------------------------------------
+
+
+def _champions(env):
+    response = env.client().request("GET", "/v1/boards/top")
+    assert response.status == 200
+    return response
+
+
+def test_board_tops_lists_every_declared_board_even_when_empty(env):
+    response = _champions(env)
+    body = response.json()
+    assert body["verified"] is False and "not verified" in body["notice"]
+    assert response.header("Cache-Control") == "public, max-age=60"
+    assert _acao(response) == "*"
+    # Registry games with boards, in registry order; tidewater declares none, so it is absent.
+    assert [(entry["slug"], entry["board"]["id"], entry["top"]) for entry in body["boards"]] == [
+        ("fishe", "most-money", None),
+        ("frog-hopper", "fastest", None),
+    ]
+    # The board is described exactly as the per-board endpoint describes it.
+    single = env.client().request("GET", "/v1/boards/frog-hopper/fastest").json()["board"]
+    assert body["boards"][1]["board"] == single
+
+
+def test_board_tops_match_the_per_board_number_one_with_ties_and_order(env):
+    clock = {"now": 1000000}
+    env.social.store.clock = lambda: clock["now"]
+    for name, money, fastest in (("ann", 300, 40), ("ben", 500, 12.5), ("cat", 500, 12.5), ("dan", 100, 99)):
+        clock["now"] += 1000
+        client = env.player(name, name.capitalize() + "X")
+        assert client.api("POST", "/v1/scores/most-money", payload={"value": money}).status == 200
+        assert client.api("POST", "/v1/scores/fastest", origin=FROG, payload={"value": fastest}).status == 200
+    tops = dict(((entry["slug"], entry["board"]["id"]), entry["top"]) for entry in _champions(env).json()["boards"])
+    for slug, board in (("fishe", "most-money"), ("frog-hopper", "fastest")):
+        first = env.client().request("GET", "/v1/boards/%s/%s?limit=1" % (slug, board)).json()["entries"][0]
+        assert tops[(slug, board)] == {
+            "displayName": first["displayName"],
+            "value": first["value"],
+            "achievedAt": first["achievedAt"],
+        }
+    # desc board: highest wins; a tie goes to whoever reached it first (Ben before Cat).
+    assert tops[("fishe", "most-money")]["displayName"] == "BenX" and tops[("fishe", "most-money")]["value"] == 500
+    # asc board: lowest wins, same tie rule.
+    assert tops[("frog-hopper", "fastest")]["displayName"] == "BenX"
+    assert tops[("frog-hopper", "fastest")]["value"] == 12.5
+    assert tops[("frog-hopper", "fastest")]["achievedAt"].endswith("Z")
+    assert "ben" not in json.dumps(list(tops.values()))
+
+
+def test_board_tops_honour_exclusions_and_hidden_names(env):
+    cheat = env.player("cheater", "Cheater")
+    assert cheat.api("POST", "/v1/scores/most-money", payload={"value": 99999999}).status == 200
+    honest = env.player("honest", "Honest")
+    assert honest.api("POST", "/v1/scores/most-money", payload={"value": 10}).status == 200
+    boss = env.player("boss", "The Boss")
+    top = lambda: _champions(env).json()["boards"][0]["top"]  # noqa: E731
+    assert top()["displayName"] == "Cheater"
+    assert boss.api("POST", "/v1/admin/exclude/cheater", origin=SERVICE, payload={}).status == 200
+    # Excluded exactly as on the per-board endpoint.
+    single = env.client().request("GET", "/v1/boards/fishe/most-money?limit=1").json()["entries"][0]
+    assert top()["displayName"] == single["displayName"] == "Honest"
+    assert boss.api("DELETE", "/v1/admin/exclude/cheater", origin=SERVICE).status == 200
+    assert top()["displayName"] == "Cheater"
+    # An excluded sole entrant leaves the board empty, not missing.
+    assert boss.api("POST", "/v1/admin/exclude/honest", origin=SERVICE, payload={}).status == 200
+    assert boss.api("POST", "/v1/admin/exclude/cheater", origin=SERVICE, payload={}).status == 200
+    assert top() is None
+
+
+def test_board_tops_skip_games_arcade_does_not_serve(tmp_path):
+    from helpers import BOARDS_YAML, Env
+
+    extra = BOARDS_YAML + """  retired:
+    boards:
+      - id: best
+        title: Best
+        order: desc
+        min: 0
+        max: 10
+"""
+    env = Env(tmp_path, boardsYaml=extra)
+    try:
+        slugs = [entry["slug"] for entry in _champions(env).json()["boards"]]
+        assert slugs == ["fishe", "frog-hopper"]
+    finally:
+        env.stop()
+
+
+def test_board_tops_is_one_query(env):
+    for name, value in (("ann", 3), ("ben", 4)):
+        env.player(name).api("POST", "/v1/scores/most-money", payload={"value": value})
+    statements = []
+    connect = env.social.store._connect
+
+    def tracing():
+        connection = connect()
+        connection.set_trace_callback(lambda sql: statements.append(sql) if sql.lstrip().upper().startswith("SELECT") else None)
+        return connection
+
+    env.social.store._connect = tracing
+    try:
+        _champions(env)
+    finally:
+        env.social.store._connect = connect
+    assert len(statements) == 1, statements
