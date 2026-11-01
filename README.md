@@ -40,6 +40,7 @@ can (sign-in, declared boards, bounds, rate caps) and labels every leaderboard r
 - [Decisions](#decisions)
 - [Game clients](#game-clients)
 - [Development](#development)
+- [Licence](#licence)
 
 ## How sign-in works
 
@@ -89,14 +90,15 @@ nothing else, although it holds the same cookie as every other game.
 | `https://<slug>.play.danielstephenson.dev`, for a slug in arcade's registry | that game |
 | `https://<alias>`, for an alias in arcade's registry | that alias's game |
 | `https://danielstephenson.dev` (the portal) | the portal |
-| `https://play.danielstephenson.dev` (the walkable hall at `/hall/`) and `https://arcade.danielstephenson.dev` (`ARCADE_SOCIAL_HALL_ORIGINS`) | the hall: session, likes and the player's own bests; never scores, achievements, cloud saves or deletion |
+| `https://play.danielstephenson.dev` (the walkable hall at `/hall/`) and `https://arcade.danielstephenson.dev` (`ARCADE_SOCIAL_HALL_ORIGINS`) | the hall: session, likes, the player's own bests and hall presence; never scores, achievements, cloud saves or deletion |
 | `https://api.play.danielstephenson.dev` (this service) | the service (operator writes only) |
 | anything else, or no `Origin` | nobody: no credentialed access |
 
 The bare game domain (`play.danielstephenson.dev`) is never a game: a slug is a non-empty label, so it is
 callable only as a configured hall origin. The hall may use `GET /v1/session`, `POST /v1/signout`,
 `GET /v1/likes/me`, `POST`/`DELETE /v1/likes/<slug>` for any registry game (as the portal may),
-`GET /v1/me/<slug>` and `around-me`, and every public route. Any other signed-in route answers 403, and its
+`GET /v1/me/<slug>` and `around-me`, the signed-in [hall presence](#hall-presence-rfc-0030-4) routes, and every
+public route. Any other signed-in route answers 403, and its
 CORS preflight is refused. A hall origin may not also be a slug host, the portal or this service: the
 service refuses to start with one.
 
@@ -107,7 +109,7 @@ Route access levels:
 
 - **public** — anyone. `Access-Control-Allow-Origin: *`, no credentials (or, for an allowed origin, that
   origin with credentials).
-- **private** — an allowed origin (game or portal); credentialed CORS; reads the signed-in player's own data.
+- **private** — an allowed origin (game, portal, or the hall for the routes above); credentialed CORS; reads the signed-in player's own data.
 - **write** — an allowed origin, **and** `Content-Type: application/json`, **and** `X-Play-Client: 1`.
   The last two cannot be sent cross-origin without a CORS preflight, which only allowed origins pass; the
   `Origin` is also checked server-side and a write without one is refused (RFC 0013 §1 CSRF rules).
