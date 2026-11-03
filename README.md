@@ -350,10 +350,12 @@ UserAuth sees anything:
 | API writes (except hall poses) | 120 / minute | client IP |
 | Hall poses (`POST /v1/presence`) | 2 / second | account |
 | Hall poses (`POST /v1/presence`) | 600 / minute | client IP |
-| API writes | 60 / minute | account |
+| Scores, unlocks, likes and unlikes, hall opt-ins, cloud-save enrollments and uploads | 60 / minute | account |
 | Achievement unlocks | 100 / hour | account + game |
 | Score submissions | `maxPerHour` per board (default 30) | account + board, counted in the database |
-| Display-name changes | 20 form posts / hour, and one change per 30 days | account |
+| Cloud-save uploads (`PUT /v1/saves/<store>`) | 120 / hour | account + game |
+| `/account` form posts (display-name change, hall-presence toggle) | 20 / hour | account |
+| Display-name changes | one per 30 days (`ARCADE_SOCIAL_NAME_CHANGE_DAYS`) | account |
 
 When UserAuth itself answers 429, the sign-in page says "busy, try again in a minute" (with UserAuth's
 `Retry-After`) rather than "wrong password". Access tokens last 60 minutes and validation is cached, so a
