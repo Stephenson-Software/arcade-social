@@ -12,7 +12,7 @@ It implements five Stephenson-Software RFCs:
 | 0014 Scores and achievements | The service side (§1 declarations, §3 API, §4 Tier 0 checks). |
 | 0015 Likes | The service side (§1 data model, §2 API). |
 | 0016 Cloud saves | The service side: a second SQLite file, append-only versions, 409/422 guards, the kill switch (§3, §4.1, §6–§8). Off unless `ARCADE_SOCIAL_SAVES=on`. |
-| 0030 Live hall presence | **Only §4:** the opt-in [presence routes](#hall-presence-rfc-0030-4), in memory only, with the `ARCADE_SOCIAL_HALL_PRESENCE` kill switch. |
+| 0030 §4 | **Only live presence in the walkable hall:** the opt-in [presence routes](#hall-presence-rfc-0030-4), in memory only, with the `ARCADE_SOCIAL_HALL_PRESENCE` kill switch. |
 
 It is one small stdlib-Python process with SQLite (WAL mode) on a volume: one database, plus a second
 file for cloud saves. It has the same shape as [arcade](https://github.com/Stephenson-Software/arcade): no
