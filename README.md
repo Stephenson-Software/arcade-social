@@ -4,7 +4,7 @@ Sign-in, high scores, achievements, likes and cloud saves for the browser games 
 [danielstephenson.dev/play](https://danielstephenson.dev/play), served from
 `https://api.play.danielstephenson.dev`.
 
-It implements four Stephenson-Software RFCs:
+It implements five Stephenson-Software RFCs:
 
 | RFC | What this service does with it |
 |---|---|
@@ -12,10 +12,11 @@ It implements four Stephenson-Software RFCs:
 | 0014 Scores and achievements | The service side (§1 declarations, §3 API, §4 Tier 0 checks). |
 | 0015 Likes | The service side (§1 data model, §2 API). |
 | 0016 Cloud saves | The service side: a second SQLite file, append-only versions, 409/422 guards, the kill switch (§3, §4.1, §6–§8). Off unless `ARCADE_SOCIAL_SAVES=on`. |
+| 0030 Live hall presence | **Only §4:** the opt-in [presence routes](#hall-presence-rfc-0030-4), in memory only, with the `ARCADE_SOCIAL_HALL_PRESENCE` kill switch. |
 
-It is one small stdlib-Python process with one SQLite database (WAL mode) on a volume, in the
-same shape as [arcade](https://github.com/Stephenson-Software/arcade): no dependencies, nothing to
-`pip install`. Accounts belong to UserAuth (the shared account service), reached over the
+It is one small stdlib-Python process with SQLite (WAL mode) on a volume: one database, plus a second
+file for cloud saves. It has the same shape as [arcade](https://github.com/Stephenson-Software/arcade): no
+dependencies, nothing to `pip install`. Accounts belong to UserAuth (the shared account service), reached over the
 gateway's internal network; this service never stores a password.
 
 **Every score is reported by the player's own browser and can be forged.** The service checks what it
@@ -140,14 +141,16 @@ The UserAuth username is never returned by the API (it is private); only the dis
 | Method | Path | Access | Body / result |
 |---|---|---|---|
 | `POST` | `/v1/scores/<board>` | write, **game origin only** | `{value, run?}` → `{slug, board, best, improved, rank}` |
-| `GET` | `/v1/games/<slug>/boards` | public | The game's board declarations |
-| `GET` | `/v1/boards/<slug>/<board>?limit=10` | public | `{board, entries: [{id, rank, displayName, value, achievedAt}], total}`; `limit` 1–100 |
+| `GET` | `/v1/games/<slug>/boards` | public | `{slug, boards: [...]}`, the game's board declarations |
+| `GET` | `/v1/boards/<slug>/<board>?limit=10` | public | `{slug, board, entries: [{id, rank, displayName, value, achievedAt}], total}`; `limit` 1–100 |
 | `GET` | `/v1/boards/top` | public | Every declared board of every registry game with its #1: `{boards: [{slug, board, top: {displayName, value, achievedAt} \| null}]}`; cached 60 s |
-| `GET` | `/v1/boards/<slug>/<board>/around-me?window=5` | private | The entries around the player's own: `{entries, me}`; `window` 1–25 |
-| `GET` | `/v1/me/<slug>` | private | `{displayName, bests: [{board, value, rank, achievedAt}], achievements: [...]}` |
+| `GET` | `/v1/boards/<slug>/<board>/around-me?window=5` | private | The entries around the player's own: `{slug, board, entries, me}`, where `me` is the player's entry id or `null`; `window` 1–25 |
+| `GET` | `/v1/me/<slug>` | private | `{slug, displayName, bests: [{board, value, rank, achievedAt}], achievements: [...]}` |
 | `DELETE` | `/v1/me/<slug>` | write | Deletes the player's scores, submissions and unlocks for that game → `{slug, deleted}` |
 
-- The slug of a score comes from `Origin`; the portal cannot submit scores (403).
+- The slug of a score comes from `Origin`; the portal and the hall cannot submit scores (403).
+- `board` is the whole declaration (`{id, title, order, unit, integer, min, max, maxPerHour}`) in the board
+  listings, `/v1/boards/top` and `around-me`. It is the board's id in a score result and in `bests`.
 - `value` must be a finite JSON number inside the board's `min`..`max`; on an `integer` board a whole
   number (`7.0` is accepted as `7`). Outside the limits → **422** `{error, min, max}`, and the refusal is
   logged for the operator.
@@ -158,7 +161,7 @@ The UserAuth username is never returned by the API (it is private); only the dis
   best. `improved` says whether this submission became the best.
 - Ranks are competition ranks: equal values share a rank (1, 1, 3); among equal values whoever reached it
   first is listed first. Excluded accounts are left out of every board, rank and percentage.
-- A game page may ask `around-me`/`me` only about its own slug; the portal may ask about any.
+- A game page may ask `around-me`/`me` only about its own slug; the portal and the hall may ask about any.
 - `/v1/boards/top` lists boards in registry order, then each game's declaration order; a game with no
   boards (or one `boards.yaml` names but arcade does not serve) is absent, and a board nobody visible has
   scored on has `top: null`. Its #1 is exactly the first entry of `/v1/boards/<slug>/<board>?limit=1`: the
@@ -186,7 +189,7 @@ the share of them holding each achievement, to one decimal. A `hidden: true` ach
 | `GET` | `/v1/likes/me` | private | `[slug, …]`, the caller's likes, oldest first |
 
 - One like per account per game, enforced by `UNIQUE (player_id, slug)`.
-- The portal may like any game in the registry; a game's own page only that game (RFC 0015 §2).
+- The portal and the hall may like any game in the registry; a game's own page only that game (RFC 0015 §2).
 - A like on a game that leaves the registry is kept: it still appears in `/v1/likes/me` with the raw
   slug and can still be removed, but it is not in `/v1/likes/counts` and the game cannot be liked again.
 
@@ -205,7 +208,7 @@ These routes answer only the hall origins and the portal (any other `Origin`, or
 | `POST` | `/v1/presence/optin` | write | Turns it on → `{optedIn: true}` |
 | `DELETE` | `/v1/presence/optin` | write | Turns it off and removes the live pose → `{optedIn: false}` |
 
-- `x` and `z` are hall metres, finite, within ±200; `yaw` is radians, finite. The server rounds the
+- `x` and `z` are hall metres, finite, within ±200; `yaw` is radians, finite, within ±1000. The server rounds the
   position to 0.25 m and the facing to 10° before anyone sees it. `cabinet` is `null` or a registry slug
   (the game being played). `layout` is the hall's layout key (1–64 of `A-Za-z0-9._:-`); a listing returns
   only the people sent with the same key, since cabinets move between layouts. Unknown fields → 400.
@@ -239,9 +242,9 @@ These routes answer only the hall origins and the portal (any other `Origin`, or
 |---|---|---|
 | `GET` | `/v1/admin/entries/<id>` | One leaderboard entry, with the account's username |
 | `DELETE` | `/v1/admin/entries/<id>` | Removes the entry (its submissions stay in the log) |
-| `GET` | `/v1/admin/log/<slug>/<board>?limit=100` | Recent submissions, accepted and refused |
+| `GET` | `/v1/admin/log/<slug>/<board>?limit=100` | Recent submissions, accepted and refused; `limit` 1–1000 |
 | `GET` | `/v1/admin/exclusions` | Excluded accounts |
-| `POST` | `/v1/admin/exclude/<username>` | `{reason?}`: hides the account from every public board and percentage |
+| `POST` | `/v1/admin/exclude/<username>` | `{reason?}` (at most 200 characters): hides the account from every public board and percentage |
 | `DELETE` | `/v1/admin/exclude/<username>` | Lifts the exclusion |
 | `DELETE` | `/v1/admin/likes/<username>` | Deletes every like of the account |
 
@@ -397,18 +400,23 @@ writes need `Content-Type: application/json` and `X-Play-Client: 1` like every w
 | `POST` | `/v1/saves/<store>/versions/<id>/pin` | Mark a version to keep |
 | `DELETE` | `/v1/saves/<store>` | `{"confirm": "delete"}`: every version of this game for this player |
 
-**Upload rules**, in order; a refusal writes nothing (each error carries a machine-readable `saves` code):
+**Upload rules**, in order; a refusal writes nothing (each error here carries a machine-readable `saves` code):
 
 | Answer | `saves` | When |
 |---|---|---|
+| 503 | `off` | Kill switch |
+| 404 | `unknown-store` | The store is not the one saves.yaml names for this game |
+| 503 | `paused` | A read-only game, or `ARCADE_SOCIAL_SAVES=readonly` |
+| 403 | `not-allowed` / `not-enrolled` | The account is not in `ARCADE_SOCIAL_SAVES_ACCOUNTS`, or has not turned backing up on for this game |
+| 429 | `rate` | More than 120 uploads per hour per player per game |
+| 413 | `too-large` | One upload over `maxUploadBytes` (with 64 KiB of room for the fields around the file), refused before the body is read |
+| 503 | `full` | The database at `ARCADE_SOCIAL_SAVES_DB_MAX_BYTES` |
 | 400 | `invalid` | The save file fails the games' own import validation: format, version 1, `game` = store, every path under the root with no empty/`.`/`..` part, control character or backslash, ≤ 5000 files, contents text or `{"base64"}` |
 | 409 | `stale` | `parent` is not the current head (also `null` when a head exists). Carries `head`. The page merges (keep both) and uploads again; there is no last-write-wins anywhere |
+| 200 | | The content equals head's: nothing stored, `{"id": head, "created": false}`. An empty save file while nothing is stored yet also stores nothing: `{"id": null, "created": false}` |
 | 422 | `removed` / `confirm-mismatch` | The upload leaves out a unit head has, unless `confirmRemoved` names exactly the units left out (the page sends it only for slots the game itself deleted) |
 | 422 | `shrink` | Nothing left out, but less than half head's size, unless `confirmShrink` (the player confirmed it) |
-| 413 | `quota` / `too-large` | Per game per player (`maxStoredBytes`), per player (`ARCADE_SOCIAL_SAVES_PLAYER_MAX_BYTES`), or one upload (`maxUploadBytes`, refused before the body is read) |
-| 429 | `rate` | More than 120 uploads per hour per player per game |
-| 503 | `off` / `paused` / `full` | Kill switch, a read-only game, or the database at `ARCADE_SOCIAL_SAVES_DB_MAX_BYTES` |
-| 200 | | The content equals head's: nothing stored, `{"id": head, "created": false}` |
+| 413 | `quota` | Per game per player (`maxStoredBytes`) or per player (`ARCADE_SOCIAL_SAVES_PLAYER_MAX_BYTES`) |
 | 201 | | A new version; head moved to it (compare-and-set in the same transaction) |
 
 **Switches.** `ARCADE_SOCIAL_SAVES=off|readonly|on`: `readonly` refuses uploads, enrollment and pins
