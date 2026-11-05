@@ -10,6 +10,9 @@ config/RateLimitFilter.java at UserAuth commit f0f1836):
 - POST /logout   revokes the token's whole session
 - 429 + Retry-After on /login, /register, /token/refresh when `busy` is set
 - usernames normalised to lowercase; tokens are JWTs whose `sub` is the username
+
+`canned` overrides a path with a fixed (status, body bytes, headers) answer, for
+replies the real UserAuth should not give but the client must survive.
 """
 
 import base64
@@ -37,6 +40,7 @@ class FakeUserAuth(object):
         self.calls = []  # (method, path, headers dict)
         self.busy = False
         self.broken = False
+        self.canned = {}  # path -> (status, body bytes, headers)
         self._counter = itertools.count(1)
         self._lock = threading.Lock()
         self.server = None
@@ -106,8 +110,24 @@ class FakeUserAuth(object):
             def _record(self):
                 fake.calls.append((self.command, self.path, dict(self.headers)))
 
+            def _replyCanned(self):
+                found = fake.canned.get(self.path)
+                if found is None:
+                    return False
+                self.rfile.read(int(self.headers.get("Content-Length") or 0))
+                status, body, headers = found
+                self.send_response(status)
+                self.send_header("Content-Length", str(len(body)))
+                for name, value in headers:
+                    self.send_header(name, value)
+                self.end_headers()
+                self.wfile.write(body)
+                return True
+
             def do_GET(self):
                 self._record()
+                if self._replyCanned():
+                    return None
                 if fake.broken:
                     return self._reply(500, {"message": "an unexpected error occurred"})
                 if self.path != "/session/validate":
@@ -120,6 +140,8 @@ class FakeUserAuth(object):
 
             def do_POST(self):
                 self._record()
+                if self._replyCanned():
+                    return None
                 if fake.broken:
                     return self._reply(500, {"message": "an unexpected error occurred"})
                 if fake.busy and self.path in ("/login", "/register", "/token/refresh"):
