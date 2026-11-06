@@ -26,6 +26,7 @@ seconds (RFC 0013 §1), so a logout elsewhere takes effect within a minute.
 
 import base64
 import hashlib
+import http.client
 import json
 import threading
 import time
@@ -122,9 +123,14 @@ class UserAuthClient(object):
                 status, body = response.status, response.read()
                 retryAfter = None
         except urllib.error.HTTPError as e:
-            status, body = e.code, e.read()
+            status = e.code
             retryAfter = e.headers.get("Retry-After") if e.headers else None
-        except (urllib.error.URLError, OSError, ValueError) as e:
+            try:
+                body = e.read()
+            except (OSError, ValueError, http.client.HTTPException):
+                # The status still says what happened, as with an unusable body below.
+                body = b""
+        except (urllib.error.URLError, OSError, ValueError, http.client.HTTPException) as e:
             raise Unavailable("UserAuth is unreachable: %s" % e)
         try:
             document = json.loads(body.decode("utf-8")) if body else {}

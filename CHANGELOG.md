@@ -38,6 +38,9 @@ All notable changes to this project are documented in this file. The format is b
   database no longer fails with `database is locked`. SQLite rejects the switch to WAL mode at once,
   without waiting on the 30 s busy timeout, while another connection holds a write lock, so the switch is
   now retried for up to 30 s.
+- A reply from UserAuth that is not valid HTTP (a bad status line, or a body shorter than its
+  `Content-Length`) now gives the 503 "Sign-in is unavailable" answer instead of a 500. A truncated body on
+  a 400, 401, 409 or 429 keeps that status's own answer.
 
 ## [0.1.0] - 2026-10-03
 

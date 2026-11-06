@@ -3,7 +3,6 @@
 coalesced, the optional X-Forwarded-For."""
 
 import base64
-import http.client
 import json
 import socket
 import threading
@@ -342,17 +341,38 @@ def _answerOnce(response):
     return "http://127.0.0.1:%d" % listener.getsockname()[1]
 
 
-@pytest.mark.xfail(
-    raises=http.client.HTTPException,
-    strict=True,
-    reason="issue #26: _call lets http.client.HTTPException escape, so the server answers 500, not 503",
-)
 @pytest.mark.parametrize(
     "response",
-    [b"garbage\r\n\r\n", b"HTTP/1.1 200 OK\r\nContent-Length: 100\r\n\r\n{}"],
-    ids=["not-http", "truncated-body"],
+    [
+        b"garbage\r\n\r\n",
+        b"HTTP/1.1 200 OK\r\nContent-Length: 100\r\n\r\n{}",
+        b"HTTP/1.1 500 Server Error\r\nContent-Length: 100\r\n\r\n{}",
+    ],
+    ids=["not-http", "truncated-body", "truncated-error-body"],
 )
 def test_a_reply_that_is_not_valid_http_is_unavailable(response):
     client = userauth.UserAuthClient(_answerOnce(response), timeout=5)
     with pytest.raises(userauth.Unavailable):
         client.login("alice", PASSWORD)
+
+
+@pytest.mark.parametrize(
+    "response, error, wait",
+    [
+        (b"HTTP/1.1 401 Unauthorized\r\nContent-Length: 100\r\n\r\n{}", userauth.Rejected, None),
+        (b"HTTP/1.1 429 Too Many\r\nRetry-After: 7\r\nContent-Length: 100\r\n\r\n{}", userauth.Busy, 7),
+    ],
+    ids=["401", "429"],
+)
+def test_a_truncated_error_body_still_gives_the_typed_error(response, error, wait):
+    client = userauth.UserAuthClient(_answerOnce(response), timeout=5)
+    with pytest.raises(error) as caught:
+        client.login("alice", PASSWORD)
+    assert caught.value.retryAfter == wait
+
+
+def test_the_sign_in_page_shows_503_for_a_reply_that_is_not_valid_http(env):
+    env.social.userauth.baseUrl = _answerOnce(b"garbage\r\n\r\n")
+    response = env.client().signIn("alice")
+    assert response.status == 503
+    assert "Sign-in is unavailable" in response.text
