@@ -469,7 +469,8 @@ through random histories against these rules, checking after every step that no 
   **never written to disk, a database, a backup or a log**; a restart empties it. Opting out, deleting
   the account or an operator exclusion removes it at once.
 - **Not held:** passwords (forwarded to UserAuth, never stored or logged), IP addresses (only in rate-limit
-  memory, for at most one window), user agents, device identifiers. There is no access log.
+  memory, for at most one window), user agents, device identifiers (a cloud save's device id is random and
+  comes from the page, below). There is no access log.
 - **Export:** `/account/export` gives the player what is held about them as JSON. For cloud saves it lists
   the newest 200 versions of each game, not their contents: each version is a download of its own (`/account/saves`
   has the newest 20, and the game's page can fetch any). It leaves out the keys of names given up and any
