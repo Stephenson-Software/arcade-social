@@ -17,11 +17,11 @@ Upload rules (§4.1), in order, and nothing is written when any refuses:
 
     400 the save file is invalid (a port of the games' own parseImport)
     409 `parent` is not the current head                  -> {head}
+    200 the content equals head's exactly: nothing stored
     422 the upload drops a unit that head has, or halves the total size,
         unless confirmRemoved names exactly the dropped units
         (or confirmShrink is set for a shrink that drops nothing)
     413 a quota would be exceeded (old versions are never deleted to make room)
-    200 the content equals head's exactly: nothing stored
     201 a new version, and head moves to it
 
 No error is ever reported as an empty head (§4.6): a head of null is only

@@ -190,7 +190,7 @@ class Social(object):
 
     def safeReturn(self, raw):
         """The URL to send a player back to after signing in: an https URL on
-        the portal, a game or this service, or the default. Never anything
+        the portal, a game, a hall origin or this service, or the default. Never anything
         else, so the sign-in page cannot be used as an open redirect."""
         default = self.config.defaultReturn
         if not raw or len(raw) > 2048 or any(character in raw for character in "\\\r\n\t "):
