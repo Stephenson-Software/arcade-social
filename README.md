@@ -286,10 +286,10 @@ gateway's `secure-headers` (`strict-origin-when-cross-origin`) is fine.
 | `GET /account` | Username (private), display name, what is held, the hall-presence toggle, sign out, delete |
 | `POST /account/presence` | `show=on` or `show=off`: turn "Show me in the arcade hall" on or off |
 | `GET/POST /account/name` | Change the display name |
-| `GET /account/export` | Download everything held about the account as JSON |
+| `GET /account/export` | Download what is held about the account as JSON; see [Privacy](#privacy-and-deletion) for what it leaves out |
 | `GET /account/saves` | Cloud saves: the newest 20 versions of each game, with downloads and a delete per game |
 | `GET /account/saves/download?slug=&store=&id=` | Download one cloud version as a save file |
-| `POST /account/saves/delete` | Delete one game's cloud saves (type `delete` to confirm) |
+| `POST /account/saves/delete` | Delete one game's cloud saves and turn off its backing up (type `delete` to confirm) |
 | `POST /account/delete` | Delete everything (type `delete` to confirm); also signs out |
 | `POST /signout` | Sign out (revokes the session at UserAuth) |
 | `GET /healthz` | `ok` |
@@ -325,7 +325,8 @@ PYTHONPATH=src python -m arcade_social check-config --registry games.yaml --boar
 Leaderboards show a display name, never the UserAuth username (owner's decision, 2026-10-03). It is chosen
 on first sign-in (`/welcome`) and:
 
-- is 3–20 characters: ASCII letters and digits with single spaces, `_`, `-` or `.` between them;
+- is 3–20 characters: ASCII letters and digits with single spaces, `_`, `-` or `.` between them, and at
+  least three of the characters are letters or digits;
 - is unique by a folded key — case, separators and the confusables `0/o` and `1/i/l` are folded, so
   `Dan_S` and `dan s` are one name and `Dan1el` collides with `Daniel`;
 - may not claim to be staff or the owner (`admin`, `moderator`, `official`, the owner's names, and a few
@@ -392,20 +393,20 @@ writes need `Content-Type: application/json` and `X-Play-Client: 1` like every w
 
 | Method | Path | |
 |---|---|---|
-| `GET` | `/v1/saves/<store>` | `{enrolled, allowed, writable, reason, pull, quota, head?}`. `head` is present only when enrolled; `head: null` (with 200) means "enrolled, nothing uploaded yet". **Any other answer is "unknown", never "empty".** |
-| `POST` / `DELETE` | `/v1/saves/<store>/enroll` | Turn backing up on / off. Turning it off keeps every version. |
-| `PUT` | `/v1/saves/<store>` | Upload `{parent, device, deviceLabel, kind, file, confirmRemoved?, confirmShrink?}` |
-| `GET` | `/v1/saves/<store>/versions` | The newest 200, newest first, with units, sizes, device labels |
+| `GET` | `/v1/saves/<store>` | `{slug, store, enrolled, allowed, writable, reason, pull, quota, head?}`. `head` is present only when enrolled; `head: null` (with 200) means "enrolled, nothing uploaded yet". **Any other answer is "unknown", never "empty".** |
+| `POST` / `DELETE` | `/v1/saves/<store>/enroll` | Turn backing up on (→ `{slug, store, enrolled: true, newlyEnrolled}`) or off (→ `{slug, store, enrolled: false}`). Turning it off keeps every version. |
+| `PUT` | `/v1/saves/<store>` | Upload `{parent, device, deviceLabel, kind, file, confirmRemoved?, confirmShrink?}` → `{id, created}` |
+| `GET` | `/v1/saves/<store>/versions` | `{slug, store, versions: [...]}`: the newest 200, newest first, with units, sizes, device labels |
 | `GET` | `/v1/saves/<store>/versions/<id>` | That version as a save file (`?download=1` for an attachment) |
-| `POST` | `/v1/saves/<store>/versions/<id>/pin` | Mark a version to keep |
-| `DELETE` | `/v1/saves/<store>` | `{"confirm": "delete"}`: every version of this game for this player |
+| `POST` | `/v1/saves/<store>/versions/<id>/pin` | Mark a version to keep → `{id, pinned: true}` |
+| `DELETE` | `/v1/saves/<store>` | `{"confirm": "delete"}`: every version of this game for this player, and backing up turns off until the game enrolls again → `{slug, store, deleted}` |
 
 **Upload rules**, in order; a refusal writes nothing (each error here carries a machine-readable `saves` code):
 
 | Answer | `saves` | When |
 |---|---|---|
 | 503 | `off` | Kill switch |
-| 404 | `unknown-store` | The store is not the one saves.yaml names for this game |
+| 404 | `unknown-store` | The store is not the one saves.yaml names for this game. A name that could never be a store (not `^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`) is refused before `off` too |
 | 503 | `paused` | A read-only game, or `ARCADE_SOCIAL_SAVES=readonly` |
 | 403 | `not-allowed` / `not-enrolled` | The account is not in `ARCADE_SOCIAL_SAVES_ACCOUNTS`, or has not turned backing up on for this game |
 | 429 | `rate` | More than 120 uploads per hour per player per game |
@@ -419,8 +420,14 @@ writes need `Content-Type: application/json` and `X-Play-Client: 1` like every w
 | 413 | `quota` | Per game per player (`maxStoredBytes`) or per player (`ARCADE_SOCIAL_SAVES_PLAYER_MAX_BYTES`) |
 | 201 | | A new version; head moved to it (compare-and-set in the same transaction) |
 
+Some refusals carry no `saves` code. The checks every write passes (the per-IP write limit, `X-Play-Client`,
+`Content-Type`) and the 403 for a caller that is not a game's page come before this table. A signed-out caller
+gets 401 `{error, signIn}` after `paused`, and the per-account limit (60 a minute) answers 429 just before
+`rate`.
+
 **Switches.** `ARCADE_SOCIAL_SAVES=off|readonly|on`: `readonly` refuses uploads, enrollment and pins
-(503 `paused`) and keeps reads, downloads and deletion; `off` answers 503 `off` on every saves endpoint.
+(503 `paused`) and keeps reads, downloads and deletion; `off` answers 503 `off` on every saves endpoint, and
+`/account/saves` says cloud saves are unavailable and answers 503 to its downloads and deletes.
 `ARCADE_SOCIAL_SAVES_ACCOUNTS` lists the usernames that may enroll and upload: unset or empty is
 **nobody**, `*` is everyone. `config/play/saves.yaml` (below) turns each game on or read-only.
 
@@ -452,8 +459,9 @@ through random histories against these rules, checking after every step that no 
 
 ## Privacy and deletion
 
-- **Held:** the UserAuth username (private), a display name, best scores, a 90-day submission log, unlocks,
-  likes, timestamps; and the operator's exclusions (username + reason). Nothing else.
+- **Held:** the UserAuth username (private), a display name, the folded key of each name given up (kept
+  until that name is taken again or the account is deleted), best scores, a 90-day submission log,
+  unlocks, likes, timestamps; and the operator's exclusions (username + reason). Nothing else.
 - **Hall presence** (RFC 0030 §4), only for a player who turned on "Show me in the hall": the opt-in
   flag is stored on the player row (it is in `/account/export`). The live pose (display name, position
   rounded to 0.25 m, facing rounded to 10°, the game being played, the hall's layout key and a random
@@ -462,13 +470,17 @@ through random histories against these rules, checking after every step that no 
   the account or an operator exclusion removes it at once.
 - **Not held:** passwords (forwarded to UserAuth, never stored or logged), IP addresses (only in rate-limit
   memory, for at most one window), user agents, device identifiers. There is no access log.
-- **Export:** `/account/export` gives the player everything held about them.
+- **Export:** `/account/export` gives the player what is held about them as JSON. For cloud saves it lists
+  the newest 200 versions of each game, not their contents: each version is a download of its own (`/account/saves`
+  has the newest 20, and the game's page can fetch any). It leaves out the keys of names given up and any
+  exclusion.
 - **Cloud saves** (RFC 0016), only for a player who turned them on: the save files a game's page uploaded,
   per version, with a random device id, a device label, the uploading origin and times. No IP address or
   user agent.
 - **Deletion:** `/account/delete` or `DELETE /v1/me` removes the player's cloud saves (from
   `saves.sqlite3`, first) and then the player row and, by cascade, every score, submission, unlock, like,
-  held name and the hall-presence opt-in, immediately, and removes any live hall pose from memory. `/account/saves` or `DELETE /v1/saves/<store>` removes one game's cloud saves;
+  held name and the hall-presence opt-in, immediately, and removes any live hall pose from memory. `/account/saves` or `DELETE /v1/saves/<store>` removes one game's cloud saves
+  (503 while `ARCADE_SOCIAL_SAVES=off`, when deleting the account still removes them);
   a browser's own saves are never touched by either. `DELETE /v1/me/<slug>` removes one game's scores and
   unlocks. An exclusion the operator made is moderation data and is kept. Backups age out on the backup
   set's own schedule.

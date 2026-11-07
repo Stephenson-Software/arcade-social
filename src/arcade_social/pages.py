@@ -239,7 +239,7 @@ def _size(count):
 
 
 def saves(csrf, games, available, error=None, notice=None):
-    """The player's cloud saves, per game: every version, each one a download
+    """The player's cloud saves, per game: the newest versions, each one a download
     (a save file the game's "Load saves from a file" accepts), and a typed
     delete. games: [{slug, title, store, enrolled, storedBytes, versions: [...]}]."""
     if not available:
