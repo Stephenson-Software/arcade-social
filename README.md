@@ -472,10 +472,10 @@ through random histories against these rules, checking after every step that no 
 - **Not held:** passwords (forwarded to UserAuth, never stored or logged), IP addresses (only in rate-limit
   memory, for at most one window), user agents, device identifiers (a cloud save's device id is random and
   comes from the page, below). There is no access log.
-- **Export:** `/account/export` gives the player what is held about them as JSON. For cloud saves it lists
-  the newest 200 versions of each game, not their contents: each version is a download of its own (`/account/saves`
-  has the newest 20, and the game's page can fetch any). It leaves out the keys of names given up and any
-  exclusion.
+- **Export:** `/account/export` gives the player what is held about them as JSON, including the keys of
+  names given up (`nameHolds`). For cloud saves it lists every version of each game, not their contents:
+  each version is a download of its own (`/account/saves` has the newest 20, and the game's page can fetch
+  any). It leaves out any exclusion.
 - **Cloud saves** (RFC 0016), only for a player who turned them on: the save files a game's page uploaded,
   per version, with a random device id, a device label, the uploading origin and times. No IP address or
   user agent.

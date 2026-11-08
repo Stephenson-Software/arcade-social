@@ -2,6 +2,7 @@
 """The SQLite store: migrations, display-name rules, uniqueness by constraint,
 concurrency across threads, deletion, retention and the online backup."""
 
+import hashlib
 import sqlite3
 import threading
 
@@ -214,6 +215,44 @@ def test_a_held_name_can_be_taken_back_by_its_holder(store):
     store.setDisplayName("alice", "First", "flrst", 0, 30)
     store.setDisplayName("alice", "Second", "second", 0, 30)
     assert store.setDisplayName("alice", "First", "flrst", 0, 30)["display_name"] == "First"
+
+
+def test_export_lists_the_names_held_for_the_player(store, clock):
+    store.setDisplayName("alice", "First", "flrst", 0, 30)
+    released = clock.now
+    store.setDisplayName("alice", "Second", "second", 0, 30)
+    clock.now += 1
+    store.setDisplayName("alice", "Third", "thlrd", 0, 30)
+    store.setDisplayName("bob", "Bobby", "bobby", 0, 30)
+    store.setDisplayName("bob", "Robert", "robert", 0, 30)
+    assert store.export("alice")["nameHolds"] == [
+        {"display_key": "flrst", "released_at": released},
+        {"display_key": "second", "released_at": released + 1},
+    ]
+    assert store.export("bob")["nameHolds"] == [{"display_key": "bobby", "released_at": released + 1}]
+    # a hold past its 30 days is still held data until the name is taken again
+    clock.now += 31 * DAY
+    assert len(store.export("alice")["nameHolds"]) == 2
+
+
+def test_all_versions_walks_every_page_newest_first(tmp_path):
+    saves = SavesStore(str(tmp_path / "saves.sqlite3"))
+    meta = {"device": "d1", "deviceLabel": "Laptop", "origin": "https://fishe.play.example", "kind": "auto"}
+    meta["format"] = "tak-saves"
+    made = []
+    parent = None
+    for index in range(14):
+        data = b"save %d" % index
+        units = {"/saves/a.json": (hashlib.sha256(data).hexdigest(), data)}
+        parent = saves.commit(1, "fishe", "fishe-saves", parent, units, meta, lambda *args: None)[0]
+        made.append(parent)
+    saves.commit(2, "fishe", "fishe-saves", None, units, meta, lambda *args: None)
+    newestFirst = list(reversed(made))
+    # 14 is an exact multiple of 7, so the walk ends on an empty page
+    for pageSize in (1, 5, 7, 14, 200):
+        listed = list(saves.allVersions(1, "fishe", "fishe-saves", pageSize=pageSize))
+        assert [v["id"] for v in listed] == newestFirst, pageSize
+    assert list(saves.allVersions(1, "fishe", "other-store")) == []
 
 
 # --- scores, likes: constraints and concurrency -----------------------------------------------

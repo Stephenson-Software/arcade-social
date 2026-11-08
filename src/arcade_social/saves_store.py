@@ -222,6 +222,34 @@ class SavesStore(object):
             ).fetchall()
             return [self._describe(connection, row) for row in rows]
 
+    def allVersions(self, playerId, slug, store, pageSize=200):
+        """Every version of a game, newest first, with no cap: for the account
+        export. Read pageSize rows at a time, each page in its own short read
+        and keyed by id, so a long history is never held in memory at once
+        and no read stays open while the caller writes the page out. A version
+        made during the walk is newer than the first page and is not listed;
+        none already listed is repeated."""
+        before = None
+        while True:
+            with self.reading() as connection:
+                if before is None:
+                    rows = connection.execute(
+                        "SELECT * FROM version WHERE player_id = ? AND slug = ? AND store = ? ORDER BY id DESC LIMIT ?",
+                        (playerId, slug, store, pageSize),
+                    ).fetchall()
+                else:
+                    rows = connection.execute(
+                        "SELECT * FROM version WHERE player_id = ? AND slug = ? AND store = ? AND id < ? "
+                        "ORDER BY id DESC LIMIT ?",
+                        (playerId, slug, store, before, pageSize),
+                    ).fetchall()
+                page = [self._describe(connection, row) for row in rows]
+            for description in page:
+                yield description
+            if len(page) < pageSize:
+                return
+            before = page[-1]["id"]
+
     def version(self, playerId, slug, store, versionId):
         """(description, {unit name: canonical bytes}) or None. Only this
         player's own version of this game: an id from another account or game

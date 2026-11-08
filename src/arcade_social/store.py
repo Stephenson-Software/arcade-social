@@ -342,6 +342,11 @@ class Store(object):
                 ),
                 "achievements": rows("SELECT slug, achievement, unlocked_at FROM unlock WHERE player_id = ? ORDER BY slug, unlocked_at"),
                 "likes": rows("SELECT slug, created_at FROM game_like WHERE player_id = ? ORDER BY created_at"),
+                # The folded key of each name the player gave up, kept so no one
+                # else can take it straight away (see setDisplayName).
+                "nameHolds": rows(
+                    "SELECT display_key, released_at FROM name_hold WHERE player_id = ? ORDER BY released_at, display_key"
+                ),
                 "hallPresence": bool(player["hall_presence"]),
             }
 
