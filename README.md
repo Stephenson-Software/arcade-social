@@ -55,7 +55,7 @@ can (sign-in, declared boards, bounds, rate caps) and labels every leaderboard r
    | Cookie | Holds | Attributes |
    |---|---|---|
    | `__Host-play_at` | UserAuth's access JWT | `Path=/; Secure; HttpOnly; SameSite=Lax; Max-Age=<until the JWT expires>` |
-   | `__Host-play_rt` | UserAuth's refresh token | `Path=/; Secure; HttpOnly; SameSite=Lax; Max-Age=30 days` |
+   | `__Host-play_rt` | UserAuth's refresh token | `Path=/; Secure; HttpOnly; SameSite=Lax; Max-Age=<ARCADE_SOCIAL_REFRESH_DAYS, default 30 days>` |
 
    No `Domain` attribute: the cookies are host-only, so no game, the portal, or any other subdomain is
    ever sent them. The `__Host-` prefix makes browsers enforce that (and `Secure`, `Path=/`). No page
@@ -100,8 +100,8 @@ callable only as a configured hall origin. The hall may use `GET /v1/session`, `
 `GET /v1/likes/me`, `POST`/`DELETE /v1/likes/<slug>` for any registry game (as the portal may),
 `GET /v1/me/<slug>` and `around-me`, the signed-in [hall presence](#hall-presence-rfc-0030-4) routes, and every
 public route. Any other signed-in route answers 403, and its
-CORS preflight is refused. A hall origin may not also be a slug host, the portal or this service: the
-service refuses to start with one.
+CORS preflight is refused. A hall origin may not be any host under the game domain (listed in the registry or
+not), the portal or this service: the service refuses to start with one.
 
 The registry is arcade's own `games.yaml`, read with arcade's own parser (`src/arcade_social/registry.py`
 is vendored byte-for-byte; a test pins its hash) and reloaded when the file changes.
@@ -114,7 +114,8 @@ Route access levels:
 - **write** — an allowed origin, **and** `Content-Type: application/json`, **and** `X-Play-Client: 1`.
   The last two cannot be sent cross-origin without a CORS preflight, which only allowed origins pass; the
   `Origin` is also checked server-side and a write without one is refused (RFC 0013 §1 CSRF rules).
-- **operator** — a signed-in account listed in `ARCADE_SOCIAL_OPERATORS`; never answered with CORS headers;
+- **operator** — a signed-in account listed in `ARCADE_SOCIAL_OPERATORS`; never answered with CORS headers.
+  A read may carry no `Origin` (as from `curl`) or the service's own, and any other `Origin` is answered 403;
   writes must come from the service's own origin with the same two headers.
 
 The HTML forms carry their own CSRF token: a random `__Host-play_csrf` cookie (`SameSite=Strict`,
