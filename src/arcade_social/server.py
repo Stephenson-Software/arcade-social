@@ -29,9 +29,12 @@ import json
 import math
 import re
 import secrets
+import shutil
+import tempfile
 import threading
 import time
 import traceback
+import types
 from urllib.parse import parse_qs, unquote, urlencode, urlparse, urlunparse
 
 from arcade_social import __version__, config as configModule, displaynames, origins, pages, ratelimit
@@ -245,6 +248,33 @@ def _iso(millis):
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(millis / 1000.0))
 
 
+# An export larger than this is spooled to a temporary file, not kept in memory.
+EXPORT_SPOOL_BYTES = 4 * 1024 * 1024
+
+
+def _writeJson(out, value, level=0):
+    """Write value to the binary file out as json.dumps(value, indent=2,
+    sort_keys=True) would, except that a generator is written as a list
+    item by item, so a long list never has to be built in memory."""
+    if isinstance(value, dict) and value:
+        out.write(b"{")
+        for index, key in enumerate(sorted(value)):
+            out.write(b"," if index else b"")
+            out.write(("\n" + "  " * (level + 1) + json.dumps(key) + ": ").encode("utf-8"))
+            _writeJson(out, value[key], level + 1)
+        out.write(("\n" + "  " * level + "}").encode("utf-8"))
+    elif isinstance(value, (list, tuple, types.GeneratorType)):
+        empty = True
+        for item in value:
+            out.write(b"[" if empty else b",")
+            out.write(("\n" + "  " * (level + 1)).encode("utf-8"))
+            _writeJson(out, item, level + 1)
+            empty = False
+        out.write(b"[]" if empty else ("\n" + "  " * level + "]").encode("utf-8"))
+    else:
+        out.write(json.dumps(value, sort_keys=True).encode("utf-8"))
+
+
 def _day(millis):
     return time.strftime("%d %B %Y", time.gmtime(millis / 1000.0)).lstrip("0")
 
@@ -331,9 +361,20 @@ def makeHandler(social):
                     pass
 
         def _send(self, status, body, contentType, headers=()):
+            self._sendHeaders(status, len(body), contentType, headers)
+            if self.command != "HEAD":
+                self.wfile.write(body)
+
+        def _sendFile(self, status, source, length, contentType, headers=()):
+            """_send for a body in a binary file of known length, copied in chunks."""
+            self._sendHeaders(status, length, contentType, headers)
+            if self.command != "HEAD":
+                shutil.copyfileobj(source, self.wfile, 64 * 1024)
+
+        def _sendHeaders(self, status, length, contentType, headers):
             self.send_response(status)
             self.send_header("Content-Type", contentType)
-            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Content-Length", str(length))
             self.send_header("X-Content-Type-Options", "nosniff")
             for name, value in self._cors:
                 self.send_header(name, value)
@@ -342,8 +383,6 @@ def makeHandler(social):
             for cookie in self._outCookies:
                 self.send_header("Set-Cookie", cookie)
             self.end_headers()
-            if self.command != "HEAD":
-                self.wfile.write(body)
 
         def _json(self, status, payload, headers=(), cache="no-store"):
             body = (json.dumps(payload, sort_keys=True) + "\n").encode("utf-8")
@@ -1600,24 +1639,34 @@ def makeHandler(social):
             player = social.store.player(username)
             if player is not None:
                 # What is held, not the saves themselves: each version is a
-                # download of its own on /account/saves (RFC 0016 §5).
+                # download of its own on /account/saves (RFC 0016 §5). Every
+                # version is listed; they are read a page at a time as the
+                # export is written, so a long history is never all in memory.
                 cloud = []
                 for game in social.savesStore.games(player["id"]):
-                    game["versions"] = [
-                        self._versionPayload(v) for v in social.savesStore.versions(player["id"], game["slug"], game["store"])
-                    ]
+                    game["versions"] = (
+                        self._versionPayload(v)
+                        for v in social.savesStore.allVersions(player["id"], game["slug"], game["store"])
+                    )
                     cloud.append(game)
                 exported["cloudSaves"] = cloud
-            body = (json.dumps(exported, indent=2, sort_keys=True) + "\n").encode("utf-8")
-            self._send(
-                200,
-                body,
-                "application/json",
-                (
-                    ("Content-Disposition", 'attachment; filename="arcade-social-data.json"'),
-                    ("Cache-Control", "no-store"),
-                ),
-            )
+            # Written in full before the headers, so a failure part way is a
+            # 500 rather than a truncated download.
+            with tempfile.SpooledTemporaryFile(max_size=EXPORT_SPOOL_BYTES) as out:
+                _writeJson(out, exported)
+                out.write(b"\n")
+                length = out.tell()
+                out.seek(0)
+                self._sendFile(
+                    200,
+                    out,
+                    length,
+                    "application/json",
+                    (
+                        ("Content-Disposition", 'attachment; filename="arcade-social-data.json"'),
+                        ("Cache-Control", "no-store"),
+                    ),
+                )
 
         def pageSaves(self, error=None, notice=None, status=200):
             session = self._pageSession()

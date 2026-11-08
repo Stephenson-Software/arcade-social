@@ -3,6 +3,7 @@
 every upload rule, Origin isolation, the kill switch and per-game switch,
 the account allowlist, deletion across both files, and the account page."""
 
+import hashlib
 import json
 import threading
 
@@ -487,6 +488,29 @@ def test_account_export_lists_cloud_saves(senv):
     exported = json.loads(client.request("GET", "/account/export").text)
     assert exported["cloudSaves"][0]["slug"] == "fishe"
     assert exported["cloudSaves"][0]["versions"][0]["unitCount"] == 1
+
+
+def test_account_export_lists_every_version_past_200(senv):
+    client = enrolled(senv)
+    client.api("PUT", BASE, payload=body(None, slots(slot_1="v0")))
+    saves = senv.social.savesStore
+    playerId = senv.social.store.player("alice")["id"]
+    meta = {"device": "device-0001", "deviceLabel": "Test browser", "origin": FISHE, "kind": "auto"}
+    meta["format"] = "tak-saves"
+    parent = head(client)["id"]
+    for index in range(1, 451):
+        data = ("v%d" % index).encode("utf-8")
+        units = {"/saves/slot_1/save.json": (hashlib.sha256(data).hexdigest(), data)}
+        parent = saves.commit(playerId, "fishe", STORE, parent, units, meta, lambda *args: None)[0]
+    exported = client.request("GET", "/account/export")
+    assert exported.status == 200
+    assert int(exported.header("Content-Length")) == len(exported.body)
+    game = json.loads(exported.text)["cloudSaves"][0]
+    ids = [version["id"] for version in game["versions"]]
+    assert len(ids) == 451 == counts(senv)["version"]
+    assert ids == sorted(ids, reverse=True) and ids[0] == game["head"] == parent
+    assert game["versions"][-1]["parent"] is None
+    assert game["versions"][0]["createdAt"].endswith("Z")
 
 
 def test_account_page_says_when_saves_are_off(env):

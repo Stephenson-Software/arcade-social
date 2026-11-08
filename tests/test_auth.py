@@ -4,8 +4,11 @@
 registration and the rate limits in front of UserAuth's shared bucket."""
 
 import arcade_social
+import io
 import json
 from urllib.parse import urlencode
+
+from arcade_social import displaynames
 
 from helpers import FISHE, HALL, HALL_ARCADE, PASSWORD, PORTAL, SERVICE, TIDEWATER_ALIAS
 
@@ -343,6 +346,35 @@ def test_export_holds_everything(env):
     assert data["displayName"] == "Kate K"
     assert data["scores"][0]["value"] == 10 and data["likes"][0]["slug"] == "fishe"
     assert data["submissions"][0]["accepted"] == 1
+
+
+def test_export_writes_json_exactly_as_json_dumps(tmp_path):
+    from arcade_social import server
+
+    sample = {
+        "b": [1, 2.5, None, True, {"z": [], "y": {}, "x": "caf\u00e9 \"q\""}],
+        "a": {"nested": [[], [{}], ["s"]]},
+        "empty": [],
+        "e2": {},
+        "n": 0,
+    }
+    out = io.BytesIO()
+    server._writeJson(out, sample)
+    assert out.getvalue().decode("utf-8") == json.dumps(sample, indent=2, sort_keys=True)
+    lazy = dict(sample, b=(item for item in sample["b"]), empty=(item for item in ()))
+    out = io.BytesIO()
+    server._writeJson(out, lazy)
+    assert out.getvalue().decode("utf-8") == json.dumps(sample, indent=2, sort_keys=True)
+
+
+def test_export_includes_name_holds(env):
+    client = env.player("lena", "Lena First")
+    changed = client.form("/account/name", {"name": "Lena Second"}, csrfPage="/account/name")
+    assert changed.status in (200, 303), changed.text
+    data = json.loads(client.request("GET", "/account/export").text)
+    assert data["displayName"] == "Lena Second"
+    assert [hold["display_key"] for hold in data["nameHolds"]] == [displaynames.nameKey("Lena First")]
+    assert isinstance(data["nameHolds"][0]["released_at"], int)
 
 
 def test_root_and_unknown_pages(env):
