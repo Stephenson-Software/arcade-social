@@ -128,7 +128,9 @@ def test_boolean_variables_accept_only_the_listed_true_words(value, expected):
 def test_a_hall_origin_under_a_configured_game_domain_is_refused():
     environ = {"ARCADE_SOCIAL_GAME_DOMAIN": "games.example.test"}
     # The default game domain's hosts are no longer game hosts...
-    assert Config.fromEnvironment(dict(environ, ARCADE_SOCIAL_HALL_ORIGINS="https://fishe.play.danielstephenson.dev"))
+    oldGameHost = "https://fishe.play.danielstephenson.dev"
+    config = Config.fromEnvironment(dict(environ, ARCADE_SOCIAL_HALL_ORIGINS=oldGameHost))
+    assert config.hallOrigins == (oldGameHost,)
     # ...but the configured one's are.
     with pytest.raises(ConfigError):
         Config.fromEnvironment(dict(environ, ARCADE_SOCIAL_HALL_ORIGINS="https://fishe.games.example.test"))
