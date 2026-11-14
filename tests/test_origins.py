@@ -22,6 +22,13 @@ def test_games_aliases_portal_and_service():
     assert classify("https://api.play.example.test").kind == "service"
 
 
+def test_caller_repr_names_kind_origin_and_slug():
+    assert repr(classify("https://fishe.play.example.test")) == (
+        "Caller(game, 'https://fishe.play.example.test', 'fishe')"
+    )
+    assert repr(classify("https://example.test")) == "Caller(portal, 'https://example.test', None)"
+
+
 def test_everything_else_is_refused():
     for origin in (
         None, "", "null", "https://evil.example", "http://fishe.play.example.test", "https://fishe.play.example.test/",

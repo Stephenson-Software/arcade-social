@@ -21,6 +21,15 @@ def test_refused_shapes(name):
         displaynames.check(name)
 
 
+@pytest.mark.parametrize("name", ["a.b", "a b", "x-y", "Q_7"])
+def test_three_characters_with_a_separator_are_too_few_letters(name):
+    # Long enough and well shaped, but the separator leaves a two-character key.
+    with pytest.raises(displaynames.InvalidName, match="at least 3 letters or digits"):
+        displaynames.check(name)
+    with pytest.raises(displaynames.InvalidName, match="at least 3 letters or digits"):
+        displaynames.check(name, operator=True)
+
+
 def test_keys_fold_separators_case_and_confusables():
     key = displaynames.nameKey
     assert key("Dan_S") == key("dan s") == key("DANS") == key("D.a-n S")
