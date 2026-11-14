@@ -22,6 +22,20 @@ def test_fixed_window():
     assert limiter.hit(limit, "a") == 0
 
 
+def test_an_expired_window_restarts_before_the_sweep_drops_it():
+    # A 10 s window ends long before the once-a-minute sweep, so hit() itself
+    # must start a fresh window with the full count.
+    clock = Clock()
+    limiter = RateLimiter(clock)
+    limit = Limit("short", 2, 10)
+    assert [limiter.hit(limit, "a") for _ in range(2)] == [0, 0]
+    clock.now += 9
+    assert limiter.hit(limit, "a") == 1
+    clock.now += 1
+    assert [limiter.hit(limit, "a") for _ in range(2)] == [0, 0]
+    assert limiter.hit(limit, "a") == 10
+
+
 def test_expired_windows_are_forgotten():
     clock = Clock()
     limiter = RateLimiter(clock)
