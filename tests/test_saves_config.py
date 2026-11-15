@@ -71,6 +71,44 @@ def test_bad_files_name_the_problem(text, message):
     assert message in str(error.value)
 
 
+@pytest.mark.parametrize(
+    "text, message",
+    [
+        ("games: {}\n  night-ferry:\n", "line 2: content after 'games: {}'"),
+        (GOOD.replace("  night-ferry:", "  night-ferry"), "line 2: expected '<slug>:' at two spaces"),
+        (GOOD.replace("  night-ferry:", "  night ferry:"), "line 2: expected '<slug>:' at two spaces"),
+        ("games:\n    mode: on\n", "line 2: a key outside any game"),
+        (GOOD.replace("    mode: on", "    mode on"), "line 3: expected 'key: value'"),
+        (GOOD.replace("    mode: on", "    mode:on"), "line 3: expected 'key: value'"),
+        (GOOD.replace("    mode: on", "    mode:"), "line 3: a value is required"),
+        (GOOD.replace("store: n", 'store: "n'), "line 4: unterminated quoted value"),
+        (GOOD.replace("format: tak-saves", "format: [tak-saves]"), "line 5: unsupported value"),
+    ],
+)
+def test_parser_errors_name_the_line(text, message):
+    # The shared scalar parser raises BoardsError; saves.yaml re-raises it as its own error type.
+    with pytest.raises(savesconfig.SavesConfigError) as error:
+        savesconfig.parse(text)
+    assert type(error.value) is savesconfig.SavesConfigError
+    assert message in str(error.value)
+
+
+def test_describe_and_the_pull_default():
+    game = savesconfig.loads(GOOD.replace("    pull: true\n", "")).get("night-ferry")
+    assert game.describe() == {
+        "mode": "on",
+        "store": "night-ferry-saves",
+        "format": "tak-saves",
+        "root": "/saves",
+        "pull": False,
+        "maxUploadBytes": 2097152,
+        "maxStoredBytes": 26214400,
+    }
+    assert savesconfig.loads(GOOD.replace("pull: true", "pull: No")).get("night-ferry").pull is False
+    assert savesconfig.loads(GOOD.replace("pull: true", "pull: YES")).get("night-ferry").pull is True
+    assert savesconfig.loads("games:\n").get("night-ferry") is None
+
+
 def test_the_environment_switches():
     default = Config.fromEnvironment({})
     assert default.savesMode == "off"
