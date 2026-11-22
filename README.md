@@ -23,8 +23,14 @@ gateway's internal network; this service never stores a password.
 can (sign-in, declared boards, bounds, rate caps) and labels every leaderboard response
 `"verified": false`. See RFC 0014 §4.
 
+![Three of the service's own pages on a phone: sign in, the account page and the cloud saves list](docs/screenshots/hero.jpg)
+
+*Sign in, account and cloud saves, as the real server renders them at phone width (demo accounts, fake UserAuth).
+More in [Screenshots](#screenshots).*
+
 ## Contents
 
+- [Screenshots](#screenshots)
 - [How sign-in works](#how-sign-in-works)
 - [Who may call what](#who-may-call-what)
 - [JSON API](#json-api)
@@ -42,6 +48,28 @@ can (sign-in, declared boards, bounds, rate caps) and labels every leaderboard r
 - [Game clients](#game-clients)
 - [Development](#development)
 - [Licence](#licence)
+
+## Screenshots
+
+Every page is plain server-rendered HTML with no script, and follows the system light or dark mode. These
+were taken at 390 px wide from the real server, run against the test suite's fake UserAuth with demo
+accounts and the example `boards.yaml` and `saves.yaml`.
+
+| Sign in | A refused sign-in | Create an account | Choose a display name |
+|---|---|---|---|
+| ![The sign-in page: username and password fields, a Sign in button and a link to create an account](docs/screenshots/signin.jpg) | ![The sign-in page with a red "Wrong username or password." message above the fields](docs/screenshots/signin-error.jpg) | ![The create-account page with username, password and confirm-password fields](docs/screenshots/register.jpg) | ![The first-sign-in page asking for a display name](docs/screenshots/welcome.jpg) |
+
+| Account | Account, dark mode | Cloud saves |
+|---|---|---|
+| ![The account page: the private username, the display name, counts of what is held, the hall-presence toggle and the delete form](docs/screenshots/account.jpg) | ![The same account page in dark mode](docs/screenshots/account-dark.jpg) | ![The cloud saves page listing three FishE save versions from two browsers, each with a Download link, and a typed delete](docs/screenshots/saves.jpg) |
+
+The JSON API's public reads, as the same demo server answered them: a leaderboard (labelled
+`"verified": false`), achievement percentages, and like counts.
+
+![Terminal-style panel with the JSON of GET /v1/boards/fishe/most-money, /v1/games/fishe/achievements and /v1/likes/counts](docs/screenshots/api.jpg)
+
+**Regenerating screenshots:** `darkroom shoot docs/screenshots/media.json` (the shot list runs
+`docs/screenshots/snapshot.py`, which starts the server against the fake UserAuth and saves each page's HTML).
 
 ## How sign-in works
 
@@ -451,6 +479,8 @@ A game that leaves the file, or is `mode: readonly`, keeps what it has: versions
 downloadable and can be deleted. **The account page** `/account/saves` lists the newest 20 versions of each
 game (saying how many there are in all when there are more), each with a download (a file the game's "Load saves from a file"
 accepts), and a typed delete per game; it has no script.
+
+<img src="docs/screenshots/saves.jpg" width="300" alt="The cloud saves account page on a phone listing three FishE save versions from two browsers, each with a Download link, and a typed delete">
 
 **The client side** (merging per unit, keep-both, carry-forward of units a session lost track of, pulls as
 imports with a local backup first) is in the games' runtime (tak `/tak/cloud.js`). `tests/savesclient.py`
