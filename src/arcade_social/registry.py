@@ -22,6 +22,7 @@ database").
         tags: [story, puzzle]                # optional, flow list only (see below)
         engine: strata                       # optional (see below)
         featured: 1                          # optional (see below)
+        author: Jon McElyea                  # optional (see below)
 
 `games: []` is an empty registry.
 
@@ -67,6 +68,13 @@ in that order (1 first). /api/games reports it as `featured` (null when not
 set), and the hall stands the featured games side by side on its stage, in
 this order, left to right as seen from the door. Two games may not share a
 number. With no game featured the stage stands empty.
+
+author: who made the game, as a name to show ("Jon McElyea"), for a game made
+by someone other than the arcade's owner. /api/games reports it as `author`
+(null when not set), the landing page's card says "by <author>" and the hall's
+cabinet card names them beside the organisation. Plain text of at most
+MAX_AUTHOR characters, no control characters; it is escaped wherever it is
+shown. Without it no author is named.
 """
 
 import datetime
@@ -101,10 +109,11 @@ def org_of(repo):
 
 
 REQUIRED_KEYS = ("slug", "title", "repo", "token_sha256")
-OPTIONAL_KEYS = ("owner", "aliases", "kind", "isolation", "canonical", "added", "tags", "engine", "featured")
+OPTIONAL_KEYS = ("owner", "aliases", "kind", "isolation", "canonical", "added", "tags", "engine", "featured", "author")
 LIST_KEYS = ("aliases", "tags")
 TAG_PATTERN = re.compile(r"^[a-z][a-z0-9-]{1,23}$")
 MAX_TAGS = 6
+MAX_AUTHOR = 80
 FEATURED_PATTERN = re.compile(r"^[1-9][0-9]{0,2}$")
 ADDED_PATTERN = re.compile(r"^\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2}:\d{2}Z)?$")
 KINDS = ("tak", "static")
@@ -119,7 +128,7 @@ class RegistryError(ValueError):
 class Game(object):
     __slots__ = (
         "slug", "title", "repo", "owner", "tokenSha256", "aliases", "kind", "isolation", "canonical", "added",
-        "tags", "engine", "featured",
+        "tags", "engine", "featured", "author",
     )
 
     def __init__(
@@ -137,6 +146,7 @@ class Game(object):
         tags=(),
         engine=None,
         featured=None,
+        author=None,
     ):
         self.slug = slug
         self.title = title
@@ -151,6 +161,7 @@ class Game(object):
         self.tags = tuple(tags)
         self.engine = engine or default_engine(kind)
         self.featured = featured  # a positive int (its place among the featured games), or None
+        self.author = author  # a display name, or None
 
     @property
     def org(self):
@@ -396,6 +407,14 @@ def validate(entries, domain=None):
                     "line %d: featured %d for %r is already taken by %r" % (lineNumber, featured, slug, featuredOwners[featured])
                 )
             featuredOwners[featured] = slug
+        author = entry.get("author")
+        if author is not None:
+            author = author.strip()
+            if not author or len(author) > MAX_AUTHOR or any(ord(c) < 32 or ord(c) == 127 for c in author):
+                raise RegistryError(
+                    "line %d: author for %r must be a name of 1 to %d characters with no control characters, got %r"
+                    % (lineNumber, slug, MAX_AUTHOR, entry["author"])
+                )
         games.append(
             Game(
                 slug=slug,
@@ -411,6 +430,7 @@ def validate(entries, domain=None):
                 tags=tags,
                 engine=engine,
                 featured=featured,
+                author=author,
             )
         )
     return Registry(games)

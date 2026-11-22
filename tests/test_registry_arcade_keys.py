@@ -20,6 +20,8 @@ def test_a_registry_with_arcades_newer_keys_loads():
         + "    tags: [halloween, story]\n"
         + "    engine: strata\n"
         + "    featured: 2\n"
+        + "    author: Jon McElyea\n"
     )
     assert loaded.get("familiar").title == "Familiar"
     assert loaded.get("familiar").featured == 2
+    assert loaded.get("familiar").author == "Jon McElyea"
