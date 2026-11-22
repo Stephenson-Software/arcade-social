@@ -19,5 +19,7 @@ def test_a_registry_with_arcades_newer_keys_loads():
         + "    added: 2026-10-24\n"
         + "    tags: [halloween, story]\n"
         + "    engine: strata\n"
+        + "    featured: 2\n"
     )
     assert loaded.get("familiar").title == "Familiar"
+    assert loaded.get("familiar").featured == 2

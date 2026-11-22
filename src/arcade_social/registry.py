@@ -21,6 +21,7 @@ database").
         added: 2026-10-01                    # optional (see below)
         tags: [story, puzzle]                # optional, flow list only (see below)
         engine: strata                       # optional (see below)
+        featured: 1                          # optional (see below)
 
 `games: []` is an empty registry.
 
@@ -42,8 +43,9 @@ engines see the same game at several addresses. When set, every HTML response
 for the game carries `Link: <url>; rel="canonical"`, which names one address
 as the original. Leave it out and no Link header is sent.
 
-added: the day (YYYY-MM-DD) the game joined the arcade. /api/games reports
-it as `added`, and the hall puts a NEW ribbon on a game added in the last
+added: when the game joined the arcade: a day (YYYY-MM-DD, read as midnight
+UTC) or a UTC time (YYYY-MM-DDTHH:MM:SSZ, for a date backfilled from the
+commit that first registered the game). /api/games reports it as `added`, and the hall puts a NEW ribbon on a game added in the last
 two weeks. Without it, arcade uses the time of the game's first upload,
 which it records itself (arcade.store.Store.added); for a game uploaded
 before arcade kept that record and since pruned to its last few versions,
@@ -59,6 +61,12 @@ WebGL 2 backend), tak (tak's console runtime), sdl (SDL through Emscripten) or
 other. A static bundle does not say which engine made it, so it is written
 here: a `tak` game is always `tak` (and may say nothing else), and a `static`
 game without it is `other`.
+
+featured: a positive whole number that puts the game among the featured games,
+in that order (1 first). /api/games reports it as `featured` (null when not
+set), and the hall stands the featured games side by side on its stage, in
+this order, left to right as seen from the door. Two games may not share a
+number. With no game featured the stage stands empty.
 """
 
 import datetime
@@ -93,11 +101,12 @@ def org_of(repo):
 
 
 REQUIRED_KEYS = ("slug", "title", "repo", "token_sha256")
-OPTIONAL_KEYS = ("owner", "aliases", "kind", "isolation", "canonical", "added", "tags", "engine")
+OPTIONAL_KEYS = ("owner", "aliases", "kind", "isolation", "canonical", "added", "tags", "engine", "featured")
 LIST_KEYS = ("aliases", "tags")
 TAG_PATTERN = re.compile(r"^[a-z][a-z0-9-]{1,23}$")
 MAX_TAGS = 6
-ADDED_PATTERN = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+FEATURED_PATTERN = re.compile(r"^[1-9][0-9]{0,2}$")
+ADDED_PATTERN = re.compile(r"^\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2}:\d{2}Z)?$")
 KINDS = ("tak", "static")
 _SWITCH = {"on": True, "true": True, "yes": True, "off": False, "false": False, "no": False}
 KNOWN_KEYS = REQUIRED_KEYS + OPTIONAL_KEYS
@@ -110,7 +119,7 @@ class RegistryError(ValueError):
 class Game(object):
     __slots__ = (
         "slug", "title", "repo", "owner", "tokenSha256", "aliases", "kind", "isolation", "canonical", "added",
-        "tags", "engine",
+        "tags", "engine", "featured",
     )
 
     def __init__(
@@ -127,6 +136,7 @@ class Game(object):
         added=None,
         tags=(),
         engine=None,
+        featured=None,
     ):
         self.slug = slug
         self.title = title
@@ -137,9 +147,10 @@ class Game(object):
         self.kind = kind
         self.isolation = (kind == "tak") if isolation is None else bool(isolation)
         self.canonical = canonical
-        self.added = added  # a datetime.date, or None
+        self.added = added  # a datetime.date, an aware UTC datetime.datetime, or None
         self.tags = tuple(tags)
         self.engine = engine or default_engine(kind)
+        self.featured = featured  # a positive int (its place among the featured games), or None
 
     @property
     def org(self):
@@ -275,6 +286,7 @@ def validate(entries, domain=None):
     games = []
     slugs = {}
     aliasOwners = {}
+    featuredOwners = {}
     for lineNumber, entry in entries:
         missing = [key for key in REQUIRED_KEYS if key not in entry]
         if missing:
@@ -337,10 +349,16 @@ def validate(entries, domain=None):
             try:
                 if not ADDED_PATTERN.match(entry["added"]):
                     raise ValueError(entry["added"])
-                added = datetime.date(*(int(part) for part in entry["added"].split("-")))
+                if "T" in entry["added"]:
+                    added = datetime.datetime.strptime(entry["added"], "%Y-%m-%dT%H:%M:%SZ").replace(
+                        tzinfo=datetime.timezone.utc
+                    )
+                else:
+                    added = datetime.date(*(int(part) for part in entry["added"].split("-")))
             except ValueError:
                 raise RegistryError(
-                    "line %d: added for %r must be a date, YYYY-MM-DD, got %r" % (lineNumber, slug, entry["added"])
+                    "line %d: added for %r must be a date, YYYY-MM-DD, or a UTC time, YYYY-MM-DDTHH:MM:SSZ, got %r"
+                    % (lineNumber, slug, entry["added"])
                 )
         tags = entry.get("tags", [])
         for tag in tags:
@@ -365,6 +383,19 @@ def validate(entries, domain=None):
                     "line %d: %r is a tak game, which runs on tak's console runtime; its engine is tak, not %r"
                     % (lineNumber, slug, engine)
                 )
+        featured = None
+        if "featured" in entry:
+            if not FEATURED_PATTERN.match(entry["featured"]):
+                raise RegistryError(
+                    "line %d: featured for %r must be a whole number from 1, got %r"
+                    % (lineNumber, slug, entry["featured"])
+                )
+            featured = int(entry["featured"])
+            if featured in featuredOwners:
+                raise RegistryError(
+                    "line %d: featured %d for %r is already taken by %r" % (lineNumber, featured, slug, featuredOwners[featured])
+                )
+            featuredOwners[featured] = slug
         games.append(
             Game(
                 slug=slug,
@@ -379,6 +410,7 @@ def validate(entries, domain=None):
                 added=added,
                 tags=tags,
                 engine=engine,
+                featured=featured,
             )
         )
     return Registry(games)

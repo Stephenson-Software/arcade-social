@@ -7,6 +7,9 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Added
 
+- `registry.py` re-vendored from arcade (arcade#105), so a `games.yaml` that uses arcade's new
+  `featured: <n>` key, or an `added` given as a UTC time, loads here too.
+
 - `/account/export` lists every cloud-save version of each game, not only the newest 200. The versions
   are read 200 at a time and the export is written to a temporary file (on disk past 4 MB) before it is
   sent, so a long history is never held in memory at once. File contents stay out of the export as before.
