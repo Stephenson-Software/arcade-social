@@ -1,0 +1,200 @@
+{
+  "description": "arcade-social's own pages and public JSON, from the real server run against the test suite's fake UserAuth with demo accounts (snapshot.py).",
+  "out": ".",
+  "vars": {
+    "build": "file://{manifest_dir}/build"
+  },
+  "budgets": {
+    "still_kb": 180
+  },
+  "devices": {
+    "tall-phone": {
+      "width": 390,
+      "height": 1500,
+      "dpr": 2,
+      "touch": true,
+      "mobile": true
+    },
+    "terminal": {
+      "width": 820,
+      "height": 2600,
+      "dpr": 1
+    }
+  },
+  "defaults": {
+    "backend": "web",
+    "kind": "still",
+    "device": "tall-phone",
+    "crop": {
+      "of": "main",
+      "pad": 0
+    },
+    "failOnConsoleError": true
+  },
+  "shots": [
+    {
+      "name": "snapshot",
+      "kind": "prep",
+      "argv": [
+        "python3",
+        "snapshot.py"
+      ],
+      "inputs": [
+        "snapshot.py",
+        "../../src/arcade_social/pages.py",
+        "../../examples/boards.yaml",
+        "../../examples/saves.yaml"
+      ],
+      "outputs": [
+        "build/signin.html",
+        "build/signin-error.html",
+        "build/register.html",
+        "build/welcome.html",
+        "build/account.html",
+        "build/saves.html",
+        "build/api.html"
+      ]
+    },
+    {
+      "name": "signin",
+      "url": "{build}/signin.html",
+      "caption": "Sign in: the only page a password is typed into. No script, inline CSS only.",
+      "alt": "The arcade-social sign-in page on a phone: username and password fields, a Sign in button and a link to create an account",
+      "depends": [
+        "snapshot"
+      ]
+    },
+    {
+      "name": "signin-error",
+      "url": "{build}/signin-error.html",
+      "caption": "A refused sign-in, as UserAuth answered it.",
+      "alt": "The sign-in page showing a red error message above the username and password fields",
+      "depends": [
+        "snapshot"
+      ]
+    },
+    {
+      "name": "register",
+      "url": "{build}/register.html",
+      "caption": "Create an account (stored by UserAuth, not here).",
+      "alt": "The create-account page on a phone with username, password and confirm-password fields",
+      "depends": [
+        "snapshot"
+      ]
+    },
+    {
+      "name": "welcome",
+      "url": "{build}/welcome.html",
+      "caption": "First sign-in: choose the display name shown on leaderboards.",
+      "alt": "The choose-a-display-name page on a phone with a single name field and a Save button",
+      "depends": [
+        "snapshot"
+      ]
+    },
+    {
+      "name": "account",
+      "url": "{build}/account.html",
+      "caption": "Account: the private username, the display name, what is held, the hall-presence toggle and delete.",
+      "alt": "The account page on a phone: signed in as a demo user, counts of scores, achievements and likes, a Show me in the hall button and a Delete my data form",
+      "depends": [
+        "snapshot"
+      ]
+    },
+    {
+      "name": "saves",
+      "url": "{build}/saves.html",
+      "caption": "Cloud saves: the newest versions per game, each a download, with a typed delete.",
+      "alt": "The cloud saves page on a phone listing three FishE save versions from two browsers, each with a Download link, and a delete form",
+      "depends": [
+        "snapshot"
+      ]
+    },
+    {
+      "name": "account-dark",
+      "url": "{build}/account.html",
+      "context": {
+        "colorScheme": "dark"
+      },
+      "caption": "The pages follow the system dark mode.",
+      "alt": "The account page in dark mode on a phone",
+      "depends": [
+        "snapshot"
+      ]
+    },
+    {
+      "name": "api",
+      "url": "{build}/api.html",
+      "device": "terminal",
+      "crop": {
+        "of": "main",
+        "pad": 0
+      },
+      "caption": "Real JSON from three public reads: a leaderboard (always \"verified\": false), achievement percentages and like counts.",
+      "alt": "Dark terminal-style panel with JSON responses for the FishE most-money leaderboard, FishE achievements and like counts",
+      "depends": [
+        "snapshot"
+      ]
+    },
+    {
+      "name": "signin-tile",
+      "url": "{build}/signin.html",
+      "depends": [
+        "snapshot"
+      ],
+      "crop": [
+        0,
+        0,
+        390,
+        600
+      ],
+      "caption": "Sign in (top of the page), for the README hero.",
+      "alt": "The top of the sign in page on a phone"
+    },
+    {
+      "name": "account-tile",
+      "url": "{build}/account.html",
+      "depends": [
+        "snapshot"
+      ],
+      "crop": [
+        0,
+        0,
+        390,
+        600
+      ],
+      "caption": "Account (top of the page), for the README hero.",
+      "alt": "The top of the account page on a phone"
+    },
+    {
+      "name": "saves-tile",
+      "url": "{build}/saves.html",
+      "depends": [
+        "snapshot"
+      ],
+      "crop": [
+        0,
+        0,
+        390,
+        600
+      ],
+      "caption": "Cloud saves (top of the page), for the README hero.",
+      "alt": "The top of the cloud saves page on a phone"
+    },
+    {
+      "name": "hero",
+      "kind": "grid",
+      "width": 1080,
+      "captions": [
+        "Sign in",
+        "Account",
+        "Cloud saves"
+      ],
+      "alt": "Three phone screenshots side by side: sign in, account, and cloud saves",
+      "tiles": [
+        "signin-tile",
+        "account-tile",
+        "saves-tile"
+      ]
+    }
+  ]
+}
