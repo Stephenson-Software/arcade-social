@@ -3,4 +3,4 @@
 the games on danielstephenson.dev/play (Stephenson-Software RFCs 0013 §1-§2,
 0014, 0015, 0016)."""
 
-__version__ = "0.4.0"
+__version__ = "0.4.1.dev0"
